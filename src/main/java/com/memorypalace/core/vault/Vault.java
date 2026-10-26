@@ -109,7 +109,8 @@ public final class Vault {
 					.filter(line -> line.startsWith("# "))
 					.map(line -> line.substring(2).strip())
 					.findFirst().orElse(name.substring(0, name.length() - 3));
-			NoteSummary note = new NoteSummary(id, relativePath(file), title);
+			// TODO(Codex): 按 NoteSummary 的说明识别加密笔记（标题用文件名、encrypted = true）
+			NoteSummary note = new NoteSummary(id, relativePath(file), title, false);
 			newIndex.put(id, note);
 			newNotes.add(note);
 		}
@@ -243,6 +244,8 @@ public final class Vault {
 
 	/**
 	 * 用 newBody 替换笔记正文（front matter 部分一个字节都不动，包括 palace-id 和其他字段）。要求：
+	 * - 例外（M6 加密）：newBody 是密文（NoteCipher.isEncrypted）时，确保 front matter 里有一行 "palace-encrypted: v1"；
+	 *   newBody 不是密文时，去掉 front matter 里的 palace-encrypted 行。其他行仍然一个字节都不动
 	 * - expectedHash 不为 null 时：先读出当前正文算 hash，和 expectedHash 不一样 → 返回 CONFLICT，不写
 	 * - expectedHash 为 null：强制覆盖（用户在冲突提示里选了"覆盖"）
 	 * - 原文件用 "\r\n" 换行的，新正文里的 "\n" 也换成 "\r\n"；原文件用 "\n" 的保持 "\n"

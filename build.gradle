@@ -35,6 +35,10 @@ dependencies {
 	implementation "org.scilab.forge:jlatexmath:${project.jlatexmath_version}"
 	include "org.scilab.forge:jlatexmath:${project.jlatexmath_version}"
 
+	// 密码 → 密钥（Argon2id，纯 Java，约 90KB）
+	implementation "com.password4j:password4j:${project.password4j_version}"
+	include "com.password4j:password4j:${project.password4j_version}"
+
 	// Mod Menu 是可选的：编译时用它的接口，开发版游戏里也装上方便测试，但不打包进模组
 	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 	runtimeOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
