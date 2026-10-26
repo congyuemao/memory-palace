@@ -1,9 +1,14 @@
 package com.memorypalace.core.search;
 
+import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 找笔记：按关键词搜标题、路径和正文。
@@ -30,6 +35,85 @@ public final class NoteSearch {
 	 * - query 为 null、空或全是空白 → 空列表
 	 */
 	public static List<Hit> search(Vault vault, String query, int limit) {
-		throw new UnsupportedOperationException("TODO");
+		if (query == null || query.isBlank() || limit <= 0) {
+			return List.of();
+		}
+		String normalized = query.strip().toLowerCase(Locale.ROOT);
+		String[] terms = normalized.split("\\p{javaWhitespace}+");
+		List<Hit> hits = new ArrayList<>();
+		for (NoteSummary note : vault.list()) {
+			String title = note.title().toLowerCase(Locale.ROOT);
+			String path = note.relativePath().toLowerCase(Locale.ROOT);
+			String body = null;
+			String foldedBody = "";
+			String bodyTerm = null;
+			boolean metadataMatch = false;
+			boolean matches = true;
+			int score = title.equals(normalized) ? 1000 : 0;
+			for (String term : terms) {
+				if (title.contains(term)) {
+					score += 100;
+					metadataMatch = true;
+				} else if (path.contains(term)) {
+					score += 50;
+					metadataMatch = true;
+				} else {
+					if (body == null) {
+						body = readSearchableBody(vault, note);
+						foldedBody = body.toLowerCase(Locale.ROOT);
+					}
+					if (!foldedBody.contains(term)) {
+						matches = false;
+						break;
+					}
+					score += 10;
+					if (bodyTerm == null) {
+						bodyTerm = term;
+					}
+				}
+			}
+			if (matches) {
+				hits.add(new Hit(note, score, metadataMatch ? "" : snippet(body, bodyTerm)));
+			}
+		}
+		return hits.stream().sorted(Comparator.comparingInt(Hit::score).reversed()
+				.thenComparing(hit -> hit.note().relativePath())).limit(limit).toList();
+	}
+
+	private static String readSearchableBody(Vault vault, NoteSummary note) {
+		synchronized (vault) {
+			if (note.encrypted() || vault.find(note.id()).map(NoteSummary::encrypted).orElse(true)) {
+				return "";
+			}
+			try {
+				String body = vault.readBody(note.id()).orElse("");
+				// 外部编辑可能让索引过期，密文仍不能参与匹配或片段生成。
+				return NoteCipher.isEncrypted(body) ? "" : body;
+			} catch (IOException e) {
+				return "";
+			}
+		}
+	}
+
+	private static String snippet(String body, String term) {
+		int match = body.toLowerCase(Locale.ROOT).indexOf(term);
+		int start = originalOffset(body, match);
+		int end = originalOffset(body, match + term.length());
+		start = body.offsetByCodePoints(start, -Math.min(20, body.codePointCount(0, start)));
+		end = body.offsetByCodePoints(end, Math.min(20, body.codePointCount(end, body.length())));
+		return (start > 0 ? "…" : "") + body.substring(start, end).replaceAll("\\R", " ")
+				+ (end < body.length() ? "…" : "");
+	}
+
+	private static int originalOffset(String text, int foldedOffset) {
+		// 小写转换可能增加字符数（例如 İ），片段仍使用原文的位置。
+		int offset = 0;
+		int folded = 0;
+		while (offset < text.length() && folded < foldedOffset) {
+			int next = text.offsetByCodePoints(offset, 1);
+			folded += text.substring(offset, next).toLowerCase(Locale.ROOT).length();
+			offset = next;
+		}
+		return offset;
 	}
 }

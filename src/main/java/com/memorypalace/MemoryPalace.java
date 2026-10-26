@@ -7,6 +7,7 @@ import com.memorypalace.mc.OpenNotePayload;
 import com.memorypalace.mc.PalaceCommands;
 import com.memorypalace.mc.PalaceInteractions;
 import com.memorypalace.mc.PalaceServer;
+import com.memorypalace.mc.ToolPayloads;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.resources.Identifier;
@@ -29,6 +30,7 @@ public class MemoryPalace implements ModInitializer {
 		ImagePayloads.register();
 		EditPayloads.register();
 		CryptoPayloads.register();
+		ToolPayloads.register();
 		PalaceServer.register();
 		PalaceInteractions.register();
 		PalaceCommands.register();

@@ -7,7 +7,9 @@ import com.memorypalace.client.crypto.RecoveryKeyScreen;
 import com.memorypalace.core.crypto.KeyRing;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.options.controls.KeyBindsScreen;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
@@ -20,7 +22,7 @@ public class SettingsScreen extends Screen {
 	private static final int GAP = 10;
 	private static final int ROW = 24;
 	// 标题 + 栏目名 + 4 行按钮 + "完成" + 提示信息 的总高度
-	private static final int CONTENT_HEIGHT = 16 + 14 + 4 * ROW + 8 + 20 + 16;
+	private static final int CONTENT_HEIGHT = 16 + 14 + 4 * ROW + 20 + 20 + 16;
 
 	private final Screen parent;
 	private Component message = Component.empty();
@@ -109,8 +111,32 @@ public class SettingsScreen extends Screen {
 				.bounds(right, y + 3 * ROW, COLUMN, 20).build());
 		change.active = regen.active = remove.active = forgot.active = inWorld;
 
+		// 最下面一行：左边"修改按键"（打开原版按键设置页），右边"完成"
+		int bottom = y + 4 * ROW + 20;
+		addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.edit_keys"),
+				b -> this.minecraft.gui.setScreen(new KeyBindsScreen(this, this.minecraft.options)))
+				.bounds(left, bottom, COLUMN, 20).build());
 		addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
-				.bounds(this.width / 2 - 100, y + 4 * ROW + 8, 200, 20).build());
+				.bounds(right, bottom, COLUMN, 20).build());
+	}
+
+	/** 按键一览：每个按键"名称 键位"，和别的按键冲突的标红。 */
+	private Component keySummary() {
+		var line = Component.translatable("settings.memorypalace.keys").copy();
+		boolean first = true;
+		for (KeyMapping key : PalaceKeys.all()) {
+			if (key.isUnbound()) {
+				continue;
+			}
+			if (!first) {
+				line.append("  ·  ");
+			}
+			first = false;
+			boolean conflict = !PalaceKeys.conflictsOf(key).isEmpty();
+			line.append(Component.translatable(key.getName()).copy().append(" ").append(key.getTranslatedKeyMessage())
+					.withColor(conflict ? 0xFF5555 : 0xC0C0C0));
+		}
+		return line;
 	}
 
 	private static boolean hasRecovery(String keyring) {
@@ -166,7 +192,9 @@ public class SettingsScreen extends Screen {
 				this.width / 2 - GAP / 2 - COLUMN / 2, y - 12, 0xFFA0A0A0);
 		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.password_section"),
 				this.width / 2 + GAP / 2 + COLUMN / 2, y - 12, 0xFFA0A0A0);
-		graphics.centeredText(this.font, message, this.width / 2, y + 4 * ROW + 34, 0xFFFFE080);
+		// 按键一览（冲突的标红），在两栏按钮下面、"修改按键/完成"上面
+		graphics.centeredText(this.font, keySummary(), this.width / 2, y + 4 * ROW + 6, 0xFFA0A0A0);
+		graphics.centeredText(this.font, message, this.width / 2, y + 4 * ROW + 46, 0xFFFFE080);
 	}
 
 	@Override

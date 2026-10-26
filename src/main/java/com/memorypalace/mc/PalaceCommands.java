@@ -201,7 +201,7 @@ public final class PalaceCommands {
 		return shown;
 	}
 
-	private static ServerLevel findLevel(MinecraftServer server, String dimension) {
+	static ServerLevel findLevel(MinecraftServer server, String dimension) {
 		for (ServerLevel level : server.getAllLevels()) {
 			if (level.dimension().identifier().toString().equals(dimension)) {
 				return level;
@@ -211,7 +211,7 @@ public final class PalaceCommands {
 	}
 
 	/** 那个位置现在放的还是这篇笔记的书吗？ */
-	private static boolean stillThere(ServerLevel level, BlockPos pos, int slot, UUID id) {
+	static boolean stillThere(ServerLevel level, BlockPos pos, int slot, UUID id) {
 		ItemStack book = switch (level.getBlockEntity(pos)) {
 			case LecternBlockEntity lectern when slot == NoteLocations.LECTERN_SLOT -> lectern.getBook();
 			case ChiseledBookShelfBlockEntity shelf when slot >= 0 && slot < 6 -> shelf.getItem(slot);
@@ -225,7 +225,7 @@ public final class PalaceCommands {
 	 * 传送到书架/讲台正前方那一格，脸朝着它。正面前面一定是空的（不然没法右键它），所以不会卡进方块。
 	 * level 为 null（区块没加载、读不到朝向）时退回到方块正上方。
 	 */
-	private static String teleportCommand(NoteLocations.Location loc, ServerLevel level) {
+	static String teleportCommand(NoteLocations.Location loc, ServerLevel level) {
 		BlockPos pos = new BlockPos(loc.x(), loc.y(), loc.z());
 		String prefix = "/execute in " + loc.dimension() + " run tp @s ";
 		if (level != null) {

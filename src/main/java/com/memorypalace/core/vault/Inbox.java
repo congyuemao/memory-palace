@@ -1,7 +1,11 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.NoteCipher;
+
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 /**
  * 快速收集的收件箱：每天一个文件 "收件箱/yyyy-MM-dd.md"，写下第一条时才创建（不会留下空文件）。
@@ -24,6 +28,42 @@ public final class Inbox {
 	 * - 返回这篇收件箱笔记（追加后的 NoteSummary）
 	 */
 	public static NoteSummary append(Vault vault, LocalDateTime now, String text) throws IOException {
-		throw new UnsupportedOperationException("TODO");
+		String content = text == null ? "" : text.replace('\r', ' ').replace('\n', ' ').strip();
+		if (content.isEmpty()) {
+			throw new IllegalArgumentException("收集内容不能为空");
+		}
+		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
+		String path = FOLDER + "/" + date + ".md";
+		String line = "- " + now.format(DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)) + " " + content + "\n";
+		synchronized (vault) {
+			for (int attempt = 0; attempt < 2; attempt++) {
+				// 同步外部编辑的路径和加密标记，重试时也重新检查。
+				vault.scan();
+				NoteSummary note = vault.resolve(path).orElse(null);
+				if (note == null) {
+					if (attempt > 0) {
+						throw new IOException("收件箱笔记已不存在");
+					}
+					return vault.createNote(path, "# " + FOLDER + " " + date + "\n\n" + line);
+				}
+				if (note.encrypted()) {
+					throw new IllegalStateException("不能向加密收件箱追加内容");
+				}
+				String body = vault.readBody(note.id())
+						.orElseThrow(() -> new IOException("无法读取收件箱笔记"));
+				if (NoteCipher.isEncrypted(body)) {
+					throw new IllegalStateException("不能向加密收件箱追加内容");
+				}
+				String updated = body + (body.endsWith("\n") ? "" : "\n") + line;
+				Vault.WriteResult result = vault.writeBody(note.id(), updated, Vault.hash(body));
+				if (result == Vault.WriteResult.OK) {
+					return vault.find(note.id()).orElseThrow(() -> new IOException("无法找到追加后的收件箱笔记"));
+				}
+				if (result == Vault.WriteResult.MISSING) {
+					throw new IOException("收件箱笔记已不存在");
+				}
+			}
+			throw new IOException("收件箱笔记连续发生写入冲突");
+		}
 	}
 }
