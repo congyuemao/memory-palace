@@ -96,6 +96,12 @@ public final class BookLayout {
 				wrap(Kind.TEXT, 0, List.of(Component.literal(m.tex()).withStyle(Style.EMPTY.withColor(MATH))), null, 0);
 				gap(BLOCK_GAP);
 			}
+			case MdBlock.Image img -> {
+				// 临时：显示成文字占位，M4 换成真正的图片
+				wrap(Kind.TEXT, 0, List.of(Component.literal("[图片: " + img.src() + "]")
+						.withStyle(Style.EMPTY.withColor(MUTED).withItalic(true))), null, 0);
+				gap(BLOCK_GAP);
+			}
 			case MdBlock.Rule r -> {
 				lines.add(new BookLine(Kind.RULE, 0, FormattedCharSequence.EMPTY, 0, 7));
 				gap(BLOCK_GAP);

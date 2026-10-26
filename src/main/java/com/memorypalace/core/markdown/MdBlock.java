@@ -32,6 +32,9 @@ public sealed interface MdBlock {
 	/** 分隔线 ---。 */
 	record Rule() implements MdBlock {}
 
+	/** 单独成段的图片：src 是原文里的路径（未解码），alt 是说明文字（可能为 ""）。 */
+	record Image(String src, String alt) implements MdBlock {}
+
 	/** 表格：rows.get(0) 是表头；每个单元格是一组 spans。 */
 	record Table(List<List<List<MdSpan>>> rows) implements MdBlock {}
 }

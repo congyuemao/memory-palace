@@ -137,6 +137,28 @@ class MarkdownParserTest {
 	}
 
 	@Test
+	void standaloneImagesBecomeImageBlocks() {
+		var blocks = MarkdownParser.parse("""
+				前文
+
+				![示意图](assets/a.png)
+				![](b%20c.png)
+
+				- ![列表里](d.png)
+
+				![[obsidian.png]]
+				![[带尺寸.jpg|300]]
+				""");
+		assertEquals(List.of(
+				new Paragraph(List.of(plain("前文"))),
+				new MdBlock.Image("assets/a.png", "示意图"),
+				new MdBlock.Image("b%20c.png", ""),
+				new MdBlock.Image("d.png", "列表里"),
+				new MdBlock.Image("obsidian.png", ""),
+				new MdBlock.Image("带尺寸.jpg", "")), blocks);
+	}
+
+	@Test
 	void imagesAndHtml() {
 		var blocks = MarkdownParser.parse("![示意图](a.png) ![](b.png) <b>粗</b>");
 		assertEquals(List.of(new Paragraph(List.of(

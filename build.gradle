@@ -31,6 +31,10 @@ dependencies {
 		include "org.commonmark:${lib}:${project.commonmark_version}"
 	}
 
+	// LaTeX 公式 → 图片（纯 Java，用 java.awt 画图）
+	implementation "org.scilab.forge:jlatexmath:${project.jlatexmath_version}"
+	include "org.scilab.forge:jlatexmath:${project.jlatexmath_version}"
+
 	// Mod Menu 是可选的：编译时用它的接口，开发版游戏里也装上方便测试，但不打包进模组
 	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 	runtimeOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
