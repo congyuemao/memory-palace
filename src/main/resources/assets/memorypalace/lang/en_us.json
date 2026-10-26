@@ -155,5 +155,7 @@
 	"settings.memorypalace.keys": "Keys: ",
 	"settings.memorypalace.edit_keys": "Edit keys",
 	"screen.memorypalace.nav_up": " · ▲ %s up",
-	"screen.memorypalace.nav_down": " · ▼ %s down"
+	"screen.memorypalace.nav_down": " · ▼ %s down",
+	"message.memorypalace.host_only": "Memory Palace notes are only available to the host in single-player",
+	"message.memorypalace.inbox_full": "Today's inbox is full (about 500,000 characters); please tidy it up first"
 }

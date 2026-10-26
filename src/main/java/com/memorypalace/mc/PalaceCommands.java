@@ -45,7 +45,9 @@ public final class PalaceCommands {
 
 	public static void register() {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
+				// 只有本机房主看得到、用得了 /palace（其他玩家连补全都看不到）
 				dispatcher.register(Commands.literal("palace")
+						.requires(source -> source.getPlayer() != null && PalaceAccess.allowed(source.getPlayer()))
 						.then(Commands.literal("give")
 								.then(Commands.argument("path", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(suggestions(), builder))

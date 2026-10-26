@@ -170,6 +170,9 @@ public final class PalaceInteractions {
 	}
 
 	public static void openNote(ServerPlayer player, UUID id) {
+		if (!PalaceAccess.check(player)) {
+			return;
+		}
 		if (sendNote(player, id, false)) {
 			NoteWatcher.watch(player, id);
 		}

@@ -101,6 +101,11 @@ public final class EditPayloads {
 	}
 
 	private static void receive(ServerPlayer player, SaveChunk chunk) {
+		// 只有本机房主能写笔记：笔记 ID 不是权限凭证，知道 ID 也不能覆盖别人的笔记
+		if (!PalaceAccess.allowed(player)) {
+			reply(player, chunk, "DENIED", "");
+			return;
+		}
 		if (chunk.total() < 1 || chunk.total() > MAX_CHUNKS || chunk.index() < 0 || chunk.index() >= chunk.total()) {
 			reply(player, chunk, "ERROR", "");
 			return;

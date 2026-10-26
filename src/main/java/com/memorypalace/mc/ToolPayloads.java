@@ -31,7 +31,10 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * M7a 的三个小工具：快速收集、准星对准书时显示书名、找笔记。
@@ -39,8 +42,6 @@ import java.util.UUID;
 public final class ToolPayloads {
 	private static final int MAX_CAPTURE = 1000;
 	private static final int MAX_RESULTS = 20;
-	// 只告诉玩家够得着的书架上是什么书（和原版交互距离差不多），免得隔着墙远程"偷看"
-	private static final double LOOK_RANGE_SQ = 8 * 8;
 
 	private ToolPayloads() {}
 
@@ -164,16 +165,32 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(LookInfo.TYPE, LookInfo.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
-		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> capture(ctx.player(), p.text(), p.localTime()));
-		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
-		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
+		// 只有本机房主能用（见 PalaceAccess）；其他客户端发来的直接丢掉
+		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> {
+			if (PalaceAccess.allowed(ctx.player())) capture(ctx.player(), p.text(), p.localTime());
+		});
+		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> {
+			if (PalaceAccess.allowed(ctx.player())) look(ctx.player(), p);
+		});
+		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> {
+			if (PalaceAccess.allowed(ctx.player())) search(ctx.player(), p);
+		});
 		ServerPlayNetworking.registerGlobalReceiver(OpenById.TYPE, (p, ctx) -> PalaceInteractions.openNote(ctx.player(), p.id()));
 	}
+
+	// 两次快速收集至少间隔这么久：人手按 K → 打字 → 回车远不会这么快，只挡住刷包
+	private static final long CAPTURE_INTERVAL_MS = 200;
+	private static final Map<UUID, Long> LAST_CAPTURE = new ConcurrentHashMap<>();
 
 	private static void capture(ServerPlayer player, String text, String localTime) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
+			return;
+		}
+		long now = System.currentTimeMillis();
+		Long last = LAST_CAPTURE.put(player.getUUID(), now);
+		if (last != null && now - last < CAPTURE_INTERVAL_MS) {
 			return;
 		}
 		try {
@@ -183,6 +200,8 @@ public final class ToolPayloads {
 			// 空内容：什么都不做
 		} catch (IllegalStateException e) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_encrypted"));
+		} catch (Inbox.FullException e) {
+			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_full"));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("写入收件箱失败", e);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.capture_failed"));
@@ -208,7 +227,8 @@ public final class ToolPayloads {
 
 	private static void look(ServerPlayer player, LookQuery query) {
 		String text = "";
-		if (player.position().distanceToSqr(Vec3.atCenterOf(query.pos())) <= LOOK_RANGE_SQ) {
+		// 用原版的方块交互距离（和右键能够到的范围一致），而不是固定半径
+		if (player.isWithinBlockInteractionRange(query.pos(), 1.0)) {
 			ItemStack book = switch (player.level().getBlockEntity(query.pos())) {
 				case ChiseledBookShelfBlockEntity shelf when query.slot() >= 0 && query.slot() < 6 -> shelf.getItem(query.slot());
 				case LecternBlockEntity lectern when query.slot() == NoteLocations.LECTERN_SLOT -> lectern.getBook();
@@ -232,15 +252,44 @@ public final class ToolPayloads {
 		return note.folder().isEmpty() ? note.title() : note.folder() + " / " + note.title();
 	}
 
+	// 每个玩家同时只跑一个搜索：正在搜的时候又来了新请求，只记住最新的一条，搜完再接着搜它（中间的直接丢掉）。
+	// 这样狂发搜索请求也只会排队一条，不会堆出一大堆后台任务
+	private static final Map<UUID, Search> LATEST = new ConcurrentHashMap<>();
+	private static final Set<UUID> SEARCHING = ConcurrentHashMap.newKeySet();
+
 	private static void search(ServerPlayer player, Search request) {
+		UUID id = player.getUUID();
+		LATEST.put(id, request);
+		if (SEARCHING.add(id)) {
+			Thread.ofVirtual().name("memorypalace-search").start(() -> searchLoop(player));
+		}
+	}
+
+	private static void searchLoop(ServerPlayer player) {
+		UUID id = player.getUUID();
+		while (true) {
+			Search next = LATEST.remove(id);
+			if (next == null) {
+				SEARCHING.remove(id);
+				// 刚好在 remove 之后又来了请求：重新抢一下，抢到就继续，没抢到说明已经有别的线程在跑
+				if (LATEST.containsKey(id) && SEARCHING.add(id)) {
+					continue;
+				}
+				return;
+			}
+			runSearch(player, next);
+		}
+	}
+
+	private static void runSearch(ServerPlayer player, Search request) {
 		Vault vault = PalaceServer.vault();
 		NoteLocations locations = PalaceServer.locations();
-		if (vault == null) {
+		if (vault == null || player.hasDisconnected()) {
 			return;
 		}
 		MinecraftServer server = player.level().getServer();
-		// 搜正文要读文件，放到后台线程；位置和传送命令要读世界，回到服务端线程再算
-		Thread.ofVirtual().name("memorypalace-search").start(() -> {
+		// 搜正文要读文件，在这个后台线程里做；位置和传送命令要读世界，回到服务端线程再算
+		{
 			List<NoteSearch.Hit> hits = NoteSearch.search(vault, request.query(), MAX_RESULTS);
 			server.execute(() -> {
 				List<Entry> entries = new ArrayList<>();
@@ -272,7 +321,7 @@ public final class ToolPayloads {
 					ServerPlayNetworking.send(player, new Results(request.requestId(), entries));
 				}
 			});
-		});
+		}
 	}
 
 	/**

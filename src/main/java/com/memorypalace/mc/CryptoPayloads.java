@@ -36,8 +36,7 @@ public final class CryptoPayloads {
 	 * 专用服务器、开放到局域网的世界都不行（访客也能发消息，不能让他们覆盖钥匙圈）。
 	 */
 	public static boolean allowed(ServerPlayer player) {
-		MinecraftServer server = player.level().getServer();
-		return !server.isDedicatedServer() && !server.isPublished() && server.isSingleplayerOwner(player.nameAndId());
+		return PalaceAccess.allowed(player);
 	}
 
 	/** 客户端 → 服务端：我要钥匙圈。 */

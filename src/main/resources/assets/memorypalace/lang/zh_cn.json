@@ -155,5 +155,7 @@
 	"settings.memorypalace.keys": "按键：",
 	"settings.memorypalace.edit_keys": "修改按键",
 	"screen.memorypalace.nav_up": " · ▲ 往上 %s 格",
-	"screen.memorypalace.nav_down": " · ▼ 往下 %s 格"
+	"screen.memorypalace.nav_down": " · ▼ 往下 %s 格",
+	"message.memorypalace.host_only": "记忆宫殿的笔记仅限本机房主在单人游戏中使用",
+	"message.memorypalace.inbox_full": "今天的收件箱已满（约 50 万字），请先整理后再记录"
 }

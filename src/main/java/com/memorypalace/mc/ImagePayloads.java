@@ -64,7 +64,8 @@ public final class ImagePayloads {
 		ServerPlayNetworking.registerGlobalReceiver(Request.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
 			Vault vault = PalaceServer.vault();
-			Optional<NoteSummary> note = vault == null ? Optional.empty() : vault.find(payload.noteId());
+			Optional<NoteSummary> note = vault == null || !PalaceAccess.allowed(player)
+					? Optional.empty() : vault.find(payload.noteId());
 			if (note.isEmpty()) {
 				send(player, payload, new byte[0]);
 				return;

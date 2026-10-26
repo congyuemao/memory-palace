@@ -129,6 +129,16 @@ class InboxTest {
 	}
 
 	@Test
+	void refusesWhenFull() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		NoteSummary note = Inbox.append(vault, T, "一");
+		vault.writeBody(note.id(), "x".repeat(Inbox.MAX_CHARS), null);
+		assertThrows(Inbox.FullException.class, () -> Inbox.append(vault, T, "二"));
+		assertEquals(Inbox.MAX_CHARS, vault.readBody(note.id()).orElseThrow().length(), "满了就不能再写");
+	}
+
+	@Test
 	void refusesEncryptedInbox() throws IOException {
 		var vault = new Vault(dir);
 		vault.scan();

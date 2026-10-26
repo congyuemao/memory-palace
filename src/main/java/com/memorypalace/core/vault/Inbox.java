@@ -16,6 +16,15 @@ import java.util.regex.Pattern;
  */
 public final class Inbox {
 	public static final String FOLDER = "收件箱";
+	/** 一天的收件箱最多这么多字符（约 50 万字，正常一天根本记不满）；满了就拒绝继续追加，防止被刷爆磁盘。 */
+	public static final int MAX_CHARS = 500_000;
+
+	/** 当天的收件箱已经满了。 */
+	public static final class FullException extends IOException {
+		public FullException() {
+			super("收件箱已满");
+		}
+	}
 
 	private Inbox() {}
 
@@ -33,6 +42,7 @@ public final class Inbox {
 	 * - 当天文件已存在：在正文末尾追加一行（正文不以换行结尾时先补一个 "\n"），用 vault.writeBody 写回，
 	 *   expectedHash 用刚读到的正文的 hash；返回 CONFLICT 时重新读一次再试一次，还冲突就抛 IOException
 	 * - 当天的收件箱是加密笔记 → IllegalStateException（服务端没有钥匙，不能往里追加）
+	 * - 当天的收件箱正文已达 MAX_CHARS → FullException，不追加
 	 * - 返回这篇收件箱笔记（追加后的 NoteSummary）
 	 */
 	public static NoteSummary append(Vault vault, OffsetDateTime now, String text) throws IOException {
@@ -66,6 +76,9 @@ public final class Inbox {
 					throw new IllegalStateException("不能向加密收件箱追加内容");
 				}
 				// 和最近一条带标注的记录同一个时区就不标，换了时区（或者文件里一条标注都没有）才标
+				if (body.length() >= MAX_CHARS) {
+					throw new FullException();
+				}
 				String line = now.getOffset().equals(lastOffset(body)) ? plain : tagged;
 				String updated = body + (body.endsWith("\n") ? "" : "\n") + line;
 				Vault.WriteResult result = vault.writeBody(note.id(), updated, Vault.hash(body));
