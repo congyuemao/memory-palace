@@ -21,7 +21,10 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.gameevent.GameEvent;
+import com.memorypalace.core.vault.NoteLocations;
 import net.minecraft.world.level.block.ChiseledBookShelfBlock;
+import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.entity.LecternBlockEntity;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.entity.ChiseledBookShelfBlockEntity;
 
@@ -65,6 +68,23 @@ public final class PalaceInteractions {
 				return InteractionResult.PASS;
 			}
 			var state = level.getBlockState(hit.getBlockPos());
+
+			// 讲台：右键打开上面的笔记书；潜行 + 右键走原版（原版界面里有"取书"按钮）
+			if (state.getBlock() instanceof LecternBlock) {
+				if (player.isSecondaryUseActive()
+						|| !(player instanceof ServerPlayer serverPlayer)
+						|| !(level.getBlockEntity(hit.getBlockPos()) instanceof LecternBlockEntity lectern)) {
+					return InteractionResult.PASS;
+				}
+				Optional<UUID> id = NoteBooks.idOf(lectern.getBook());
+				if (id.isEmpty()) {
+					return InteractionResult.PASS;
+				}
+				openNote(serverPlayer, id.get());
+				recordLocation(level, hit.getBlockPos(), NoteLocations.LECTERN_SLOT, id.get());
+				return InteractionResult.SUCCESS;
+			}
+
 			if (!(state.getBlock() instanceof ChiseledBookShelfBlock shelf)) {
 				return InteractionResult.PASS;
 			}
@@ -103,8 +123,23 @@ public final class PalaceInteractions {
 				return InteractionResult.PASS;
 			}
 			openNote(serverPlayer, id.get());
+			recordLocation(level, hit.getBlockPos(), slot.getAsInt(), id.get());
 			return InteractionResult.SUCCESS;
 		});
+	}
+
+	/** 自动记下"这篇笔记在这里"，给 /palace where 用。记录失败不影响看笔记。 */
+	private static void recordLocation(Level level, BlockPos pos, int slot, UUID id) {
+		NoteLocations locations = PalaceServer.locations();
+		if (locations == null) {
+			return;
+		}
+		try {
+			locations.record(id, new NoteLocations.Location(level.dimension().identifier().toString(),
+					pos.getX(), pos.getY(), pos.getZ(), slot, System.currentTimeMillis()));
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.warn("记录笔记位置失败", e);
+		}
 	}
 
 	// 照抄原版 ChiseledBookShelfBlock.removeBook（它是 private 的，调不到）
