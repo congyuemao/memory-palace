@@ -23,6 +23,12 @@ dependencies {
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
+	// Markdown 解析。include = 打包进模组 jar 里（玩家不用另外装）
+	for (String lib : ["commonmark", "commonmark-ext-gfm-tables", "commonmark-ext-gfm-strikethrough", "commonmark-ext-task-list-items"]) {
+		implementation "org.commonmark:${lib}:${project.commonmark_version}"
+		include "org.commonmark:${lib}:${project.commonmark_version}"
+	}
+
 	// 单元测试（只测 core/ 里不依赖游戏的代码）
 	testImplementation platform("org.junit:junit-bom:5.12.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"
