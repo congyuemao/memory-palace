@@ -1,5 +1,6 @@
 package com.memorypalace.core.vault;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -28,7 +29,17 @@ public final class FrontMatter {
 	public record Parsed(Map<String, String> fields, String body) {
 		/** palace-id 字段；缺失或不是合法 UUID 时返回 null。 */
 		public UUID id() {
-			throw new UnsupportedOperationException("TODO");
+			String value = fields.get(ID_KEY);
+			if (value == null) {
+				return null;
+			}
+			try {
+				UUID id = UUID.fromString(value);
+				// UUID.fromString 也接受缩写，这里只接受完整格式。
+				return id.toString().equalsIgnoreCase(value) ? id : null;
+			} catch (IllegalArgumentException e) {
+				return null;
+			}
 		}
 	}
 
@@ -40,7 +51,29 @@ public final class FrontMatter {
 	 * - 不认识的行（没有冒号）忽略
 	 */
 	public static Parsed parse(String text) {
-		throw new UnsupportedOperationException("TODO");
+		text = withoutBom(text);
+		Map<String, String> fields = new LinkedHashMap<>();
+		int closing = closingDelimiter(text);
+		if (closing < 0) {
+			return new Parsed(fields, text);
+		}
+		for (int start = nextLine(text, 0); start < closing; start = nextLine(text, start)) {
+			String line = text.substring(start, lineEnd(text, start));
+			int colon = line.indexOf(':');
+			if (colon < 0) {
+				continue;
+			}
+			String key = line.substring(0, colon).strip();
+			String value = line.substring(colon + 1).strip();
+			if (value.length() >= 2) {
+				char first = value.charAt(0);
+				if ((first == '\'' || first == '"') && value.charAt(value.length() - 1) == first) {
+					value = value.substring(1, value.length() - 1);
+				}
+			}
+			fields.put(key, value);
+		}
+		return new Parsed(fields, text.substring(nextLine(text, closing)));
 	}
 
 	/**
@@ -51,6 +84,61 @@ public final class FrontMatter {
 	 * - 正文一个字节都不改
 	 */
 	public static String withId(String text, UUID id) {
-		throw new UnsupportedOperationException("TODO");
+		text = withoutBom(text);
+		String newline = text.contains("\r\n") ? "\r\n" : "\n";
+		String field = ID_KEY + ": " + id;
+		int closing = closingDelimiter(text);
+		if (closing < 0) {
+			return "---" + newline + field + newline + "---" + newline + text;
+		}
+		int start = nextLine(text, 0);
+		StringBuilder result = new StringBuilder(text.substring(0, start));
+		boolean replaced = false;
+		while (start < closing) {
+			int end = lineEnd(text, start);
+			int next = nextLine(text, start);
+			String line = text.substring(start, end);
+			int colon = line.indexOf(':');
+			if (colon >= 0 && line.substring(0, colon).strip().equals(ID_KEY)) {
+				result.append(field).append(text, end, next);
+				replaced = true;
+			} else {
+				result.append(text, start, next);
+			}
+			start = next;
+		}
+		if (!replaced) {
+			result.append(field).append(newline);
+		}
+		return result.append(text, closing, text.length()).toString();
+	}
+
+	private static String withoutBom(String text) {
+		return text.startsWith("\uFEFF") ? text.substring(1) : text;
+	}
+
+	private static int closingDelimiter(String text) {
+		if (!text.substring(0, lineEnd(text, 0)).stripTrailing().equals("---")) {
+			return -1;
+		}
+		for (int start = nextLine(text, 0); start < text.length(); start = nextLine(text, start)) {
+			if (text.substring(start, lineEnd(text, start)).stripTrailing().equals("---")) {
+				return start;
+			}
+		}
+		return -1;
+	}
+
+	private static int lineEnd(String text, int start) {
+		int end = text.indexOf('\n', start);
+		if (end < 0) {
+			return text.length();
+		}
+		return end > start && text.charAt(end - 1) == '\r' ? end - 1 : end;
+	}
+
+	private static int nextLine(String text, int start) {
+		int end = text.indexOf('\n', start);
+		return end < 0 ? text.length() : end + 1;
 	}
 }

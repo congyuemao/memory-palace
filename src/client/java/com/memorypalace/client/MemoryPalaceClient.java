@@ -1,6 +1,8 @@
 package com.memorypalace.client;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.mc.OpenNotePayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -30,6 +32,10 @@ public class MemoryPalaceClient implements ClientModInitializer {
 				client.gui.setScreen(new NoteScreen());
 			}
 		});
+
+		// 服务端说"打开这篇笔记" → 打开笔记窗口
+		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) ->
+				context.client().gui.setScreen(new NoteScreen(Component.literal(payload.title()), payload.body())));
 
 		// 事件回调：玩家进入世界（或连上服务器）时执行
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->

@@ -1,6 +1,11 @@
 package com.memorypalace;
 
+import com.memorypalace.mc.OpenNotePayload;
+import com.memorypalace.mc.PalaceCommands;
+import com.memorypalace.mc.PalaceInteractions;
+import com.memorypalace.mc.PalaceServer;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +22,10 @@ public class MemoryPalace implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		PayloadTypeRegistry.clientboundPlay().register(OpenNotePayload.TYPE, OpenNotePayload.CODEC);
+		PalaceServer.register();
+		PalaceInteractions.register();
+		PalaceCommands.register();
 		LOGGER.info("Memory Palace 已加载");
 	}
 

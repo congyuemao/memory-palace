@@ -144,6 +144,20 @@ class VaultTest {
 	}
 
 	@Test
+	void readOnlyFileWithoutIdIsSkippedNotFatal() throws IOException {
+		write("好.md", "# 好");
+		Path locked = write("只读.md", "# 只读");
+		assertTrue(locked.toFile().setReadOnly());
+		try {
+			var vault = new Vault(dir);
+			assertDoesNotThrow(vault::scan);
+			assertTrue(vault.list().stream().anyMatch(n -> n.title().equals("好")));
+		} finally {
+			locked.toFile().setWritable(true);
+		}
+	}
+
+	@Test
 	void unreadableFileDoesNotBreakScan() throws IOException {
 		write("好.md", "# 好");
 		// 非法 UTF-8 字节

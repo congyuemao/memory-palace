@@ -1,5 +1,14 @@
 {
-	"message.memorypalace.started": "记忆宫殿已启动（按 M 打开笔记窗口）",
+	"message.memorypalace.started": "记忆宫殿已启动（输入 /palace give 欢迎 领取第一本笔记书）",
+	"message.memorypalace.no_vault": "笔记库没有打开，请查看游戏日志",
+	"message.memorypalace.note_missing": "找不到这本书对应的笔记文件（可能被删除了）",
+	"message.memorypalace.read_failed": "读取笔记库失败，请查看游戏日志",
+	"command.memorypalace.not_found": "找不到笔记或文件夹：%s",
+	"command.memorypalace.given": "已领取 %s 本笔记书",
+	"command.memorypalace.given_partial": "文件夹里共 %s 篇，一次最多领 36 本；剩下的从 %s 开始，可以单篇领取，或者拆成子文件夹",
+	"message.memorypalace.note_too_large": "这篇笔记超过 %s KB，太大了，请拆成几篇",
+	"command.memorypalace.list_header": "共 %s 篇笔记：",
+	"command.memorypalace.rescanned": "重新扫描完成，共 %s 篇笔记",
 	"key.memorypalace.open_note": "打开笔记窗口",
 	"key.category.memorypalace.main": "记忆宫殿",
 	"screen.memorypalace.note": "记忆宫殿 · 笔记"

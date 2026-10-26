@@ -1,5 +1,14 @@
 {
-	"message.memorypalace.started": "Memory Palace is running (press M to open notes)",
+	"message.memorypalace.started": "Memory Palace is running (try /palace give 欢迎 for your first note book)",
+	"message.memorypalace.no_vault": "The note vault is not open, check the game log",
+	"message.memorypalace.note_missing": "The note file for this book could not be found (it may have been deleted)",
+	"message.memorypalace.read_failed": "Failed to read the note vault, check the game log",
+	"command.memorypalace.not_found": "No note or folder named: %s",
+	"command.memorypalace.given": "Gave %s note book(s)",
+	"command.memorypalace.given_partial": "The folder has %s notes but at most 36 are given at once; the rest start at %s, give them one by one or split into subfolders",
+	"message.memorypalace.note_too_large": "This note is larger than %s KB, please split it",
+	"command.memorypalace.list_header": "%s note(s):",
+	"command.memorypalace.rescanned": "Rescan done, %s note(s)",
 	"key.memorypalace.open_note": "Open note window",
 	"key.category.memorypalace.main": "Memory Palace",
 	"screen.memorypalace.note": "Memory Palace · Note"
