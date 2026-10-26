@@ -4,7 +4,12 @@
 	"version": "${version}",
 	"name": "Memory Palace",
 	"description": "把 Markdown/LaTeX 笔记挂到世界里的书架上，做成你的记忆宫殿。",
-	"authors": [],
+	"authors": ["congyuemao"],
+	"contact": {
+		"homepage": "https://github.com/congyuemao/memory-palace",
+		"sources": "https://github.com/congyuemao/memory-palace",
+		"issues": "https://github.com/congyuemao/memory-palace/issues"
+	},
 	"license": "MIT",
 	"icon": "assets/memorypalace/icon.png",
 	"environment": "*",
