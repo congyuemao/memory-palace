@@ -1,0 +1,25 @@
+{
+	"schemaVersion": 1,
+	"id": "memorypalace",
+	"version": "${version}",
+	"name": "Memory Palace",
+	"description": "把 Markdown/LaTeX 笔记挂到世界里的书架上，做成你的记忆宫殿。",
+	"authors": [],
+	"license": "MIT",
+	"icon": "assets/memorypalace/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.memorypalace.MemoryPalace"
+		],
+		"client": [
+			"com.memorypalace.client.MemoryPalaceClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
