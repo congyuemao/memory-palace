@@ -213,6 +213,51 @@ public final class Vault {
 		return find(id).map(note -> root.resolve(note.relativePath()));
 	}
 
+	/** writeBody 的结果。 */
+	public enum WriteResult {
+		/** 写好了。 */
+		OK,
+		/** 文件在打开编辑器之后被别人（外部编辑器）改过，没有写入。 */
+		CONFLICT,
+		/** 找不到这篇笔记（被删了）。 */
+		MISSING
+	}
+
+	/**
+	 * 正文的指纹：UTF-8 字节的 SHA-256，小写十六进制。编辑器打开时记下旧正文的指纹，保存时交给 writeBody 检查冲突。
+	 * 比较前把 "\r\n" 统一成 "\n"（Windows 换行不算修改）。
+	 */
+	public static String hash(String body) {
+		throw new UnsupportedOperationException("TODO");
+	}
+
+	/**
+	 * 用 newBody 替换笔记正文（front matter 部分一个字节都不动，包括 palace-id 和其他字段）。要求：
+	 * - expectedHash 不为 null 时：先读出当前正文算 hash，和 expectedHash 不一样 → 返回 CONFLICT，不写
+	 * - expectedHash 为 null：强制覆盖（用户在冲突提示里选了"覆盖"）
+	 * - 原文件用 "\r\n" 换行的，新正文里的 "\n" 也换成 "\r\n"；原文件用 "\n" 的保持 "\n"
+	 * - 原子写（临时文件 + move），UTF-8，不写 BOM
+	 * - 写完后更新索引（标题可能变了），list()/find() 立刻能看到新标题
+	 * - 找不到笔记 / 文件已被删 → MISSING（会先像 readBody 那样重新扫描一次再判断）
+	 */
+	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash) throws IOException {
+		throw new UnsupportedOperationException("TODO");
+	}
+
+	/**
+	 * 新建一篇笔记。要求：
+	 * - relativePath 用 "/" 或 "\" 分隔，可以省略 ".md"（会自动加上）；中间的文件夹不存在就创建
+	 * - 路径规则和 resolve 一样：不能跑出笔记库、不能是绝对路径、不能含 ".."；
+	 *   文件名或任一级文件夹名不能为空、不能以 "." 开头（那是隐藏文件夹，不会被扫描）、不能含 Windows 不允许的字符 &lt;&gt;:"|?*
+	 *   不合法 → IllegalArgumentException（message 用中文说明原因）
+	 * - 文件已存在 → IllegalArgumentException（"笔记已存在"），不覆盖
+	 * - 文件内容 = front matter（只有新生成的 palace-id）+ body；body 为空时用 "# 文件名\n\n"（文件名不含 .md）
+	 * - 原子写，写完更新索引，返回新笔记的 NoteSummary
+	 */
+	public synchronized NoteSummary createNote(String relativePath, String body) throws IOException {
+		throw new UnsupportedOperationException("TODO");
+	}
+
 	private String relativePath(Path file) {
 		return root.relativize(file).toString().replace('\\', '/');
 	}

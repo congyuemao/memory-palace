@@ -141,7 +141,7 @@ public final class BookLayout {
 				if (box == null) {
 					flow(Kind.TEXT, 0, List.of(new TextPiece("$$" + m.tex() + "$$", Style.EMPTY.withColor(ERROR))), null, 0);
 				} else {
-					centeredBox(box);
+					centeredBox(box, false);
 				}
 				gap(BLOCK_GAP);
 			}
@@ -151,7 +151,8 @@ public final class BookLayout {
 					flow(Kind.TEXT, 0, List.of(new TextPiece(boxes.imagePlaceholder(img.src(), img.alt()),
 							Style.EMPTY.withColor(MUTED).withItalic(true))), null, 0);
 				} else {
-					centeredBox(box);
+					// 图片铺满页宽（小图也放大），太高就按页高缩
+					centeredBox(box, true);
 				}
 				gap(BLOCK_GAP);
 			}
@@ -177,9 +178,13 @@ public final class BookLayout {
 		}
 	}
 
-	/** 单独一行、居中的图块（块级公式、图片）。太宽就按页宽缩小，太高就按页高缩小。 */
-	private void centeredBox(Box box) {
-		float scale = Math.min(1.0F, Math.min(pageWidth / box.width(), (pageHeight - 2) / box.height()));
+	/**
+	 * 单独一行、居中的图块（块级公式、图片）。太宽就按页宽缩小，太高就按页高缩小。
+	 * fillWidth = true（图片）时小的也放大到页宽。
+	 */
+	private void centeredBox(Box box, boolean fillWidth) {
+		float fit = Math.min(pageWidth / box.width(), (pageHeight - 2) / box.height());
+		float scale = fillWidth ? fit : Math.min(1.0F, fit);
 		float w = box.width() * scale;
 		int height = (int) Math.ceil(box.height() * scale);
 		lines.add(new BookLine(Kind.TEXT, 0, height, List.of(new BoxSeg((pageWidth - w) / 2, 0, box, scale))));
