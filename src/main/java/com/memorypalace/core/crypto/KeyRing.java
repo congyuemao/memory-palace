@@ -1,5 +1,22 @@
 package com.memorypalace.core.crypto;
 
+import com.password4j.Argon2Function;
+import com.password4j.Hash;
+import com.password4j.types.Argon2;
+import javax.crypto.KDF;
+import javax.crypto.spec.HKDFParameterSpec;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+
 /**
  * 钥匙圈：把主密钥"锁"起来存在 &lt;笔记库&gt;/.palace/keyring 里。密码本身不保存。
  * 这里所有方法都只处理文件内容（字符串），不读写文件——读写由调用方负责（服务端存文件，客户端做加解密）。
@@ -18,11 +35,30 @@ package com.memorypalace.core.crypto;
  * - 方法用完的中间密钥字节、char[] 副本要尽量清零（Arrays.fill）
  * - 内容格式不对 / 版本不认识 → IllegalArgumentException（不是 WrongKeyException）
  *
+ * v1 格式：UTF-8 的 key=value 行，输出用 LF；输入也接受 CRLF 和空行。
+ * 必填字段：version=1、kdf=argon2id、kdf.version=19、kdf.memoryKiB、kdf.iterations、
+ * kdf.parallelism、kdf.length=32、password.salt、password.wrap。
+ * 可选字段必须一起出现：recovery.kdf=HKDF-SHA-256、recovery.salt、recovery.wrap。
+ * salt 为 16 字节；wrap 为 nonce(12) || 密文(32) || tag(16)，均用标准带填充 Base64。
+ * 拒绝重复/未知字段；长度最多 4096 字符；读取参数范围为 8p ≤ m ≤ 262144 KiB、
+ * 1 ≤ t ≤ 10、1 ≤ p ≤ 4，且 m*t ≤ 786432。读取参数不依赖新建时的默认值。
+ * AAD 前缀为 memory-palace|keyring|1|，之后是用途及该包装的算法、参数和盐，字段用 | 分隔。
+ * 恢复包装使用独立盐，HKDF info 为 memory-palace|keyring|1|recovery，输出 32 字节。
+ *
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class KeyRing {
 	/** 密码最短长度。 */
 	public static final int MIN_PASSWORD = 6;
+	private static final SecureRandom RANDOM = new SecureRandom();
+	private static final int MEMORY_KIB = 65536;
+	private static final int ITERATIONS = 3;
+	private static final int PARALLELISM = 1;
+	private static final String DOMAIN = "memory-palace|keyring|1|";
+	private static final String BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+	private static final Set<String> PASSWORD_FIELDS = Set.of("version", "kdf", "kdf.version",
+			"kdf.memoryKiB", "kdf.iterations", "kdf.parallelism", "kdf.length", "password.salt", "password.wrap");
+	private static final Set<String> RECOVERY_FIELDS = Set.of("recovery.kdf", "recovery.salt", "recovery.wrap");
 
 	private KeyRing() {}
 
@@ -36,21 +72,51 @@ public final class KeyRing {
 
 	/** 第一次启用加密：随机生成主密钥并用密码锁好。密码短于 MIN_PASSWORD → IllegalArgumentException。 */
 	public static Created create(char[] password, boolean withRecovery) {
-		throw new UnsupportedOperationException("TODO");
+		checkPassword(password);
+		byte[] secret = randomBytes(MasterKey.LENGTH);
+		MasterKey key = null;
+		try {
+			Map<String, String> fields = new LinkedHashMap<>();
+			fields.put("version", "1");
+			setPassword(fields, secret, password);
+			String recovery = withRecovery ? setRecovery(fields, secret) : null;
+			String content = serialize(fields);
+			key = new MasterKey(secret);
+			return new Created(content, key, recovery);
+		} catch (RuntimeException | Error e) {
+			if (key != null) {
+				key.destroy();
+			}
+			throw e;
+		} finally {
+			NoteCipher.wipe(secret);
+		}
 	}
 
 	/** 用密码解锁。 */
 	public static MasterKey unlock(String content, char[] password) throws WrongKeyException {
-		throw new UnsupportedOperationException("TODO");
+		return unlockPassword(parse(content), password);
 	}
 
 	/** 用恢复密钥解锁（忘记密码时）。没有恢复密钥的钥匙圈 → WrongKeyException。 */
 	public static MasterKey unlockWithRecovery(String content, String recoveryKey) throws WrongKeyException {
-		throw new UnsupportedOperationException("TODO");
+		Map<String, String> fields = parse(content);
+		if (!fields.containsKey("recovery.wrap")) {
+			throw NoteCipher.wrongKey();
+		}
+		byte[] recovery = decodeRecovery(recoveryKey);
+		byte[] wrappingKey = null;
+		try {
+			wrappingKey = recoveryWrappingKey(recovery, decode(fields.get("recovery.salt"), 16));
+			return unwrap(fields, "recovery", wrappingKey);
+		} finally {
+			NoteCipher.wipe(recovery);
+			NoteCipher.wipe(wrappingKey);
+		}
 	}
 
 	public static boolean hasRecovery(String content) {
-		throw new UnsupportedOperationException("TODO");
+		return parse(content).containsKey("recovery.wrap");
 	}
 
 	/**
@@ -58,7 +124,16 @@ public final class KeyRing {
 	 * 用新盐重新包装，恢复密钥部分原样保留。返回新内容。新密码太短 → IllegalArgumentException。
 	 */
 	public static String changePassword(String content, MasterKey key, char[] newPassword) {
-		throw new UnsupportedOperationException("TODO");
+		checkPassword(newPassword);
+		Map<String, String> fields = parse(content);
+		byte[] secret = NoteCipher.copyKey(key);
+		try {
+			// 恢复包装不依赖密码盐或参数，改密码时保留全部 recovery 字段。
+			setPassword(fields, secret, newPassword);
+			return serialize(fields);
+		} finally {
+			NoteCipher.wipe(secret);
+		}
 	}
 
 	/**
@@ -66,11 +141,304 @@ public final class KeyRing {
 	 * 返回 Created：content 是新内容，recoveryKey 是新恢复密钥，key 是解锁出来的主密钥。
 	 */
 	public static Created regenerateRecovery(String content, char[] password) throws WrongKeyException {
-		throw new UnsupportedOperationException("TODO");
+		Map<String, String> fields = parse(content);
+		MasterKey key = unlockPassword(fields, password);
+		byte[] secret = null;
+		boolean returned = false;
+		try {
+			secret = NoteCipher.copyKey(key);
+			String recovery = setRecovery(fields, secret);
+			Created result = new Created(serialize(fields), key, recovery);
+			returned = true;
+			return result;
+		} finally {
+			NoteCipher.wipe(secret);
+			if (!returned) {
+				key.destroy();
+			}
+		}
 	}
 
 	/** 删除恢复密钥。必须提供当前密码，密码错 → WrongKeyException。返回新内容。 */
 	public static String removeRecovery(String content, char[] password) throws WrongKeyException {
-		throw new UnsupportedOperationException("TODO");
+		Map<String, String> fields = parse(content);
+		MasterKey key = unlockPassword(fields, password);
+		try {
+			RECOVERY_FIELDS.forEach(fields::remove);
+			return serialize(fields);
+		} finally {
+			key.destroy();
+		}
+	}
+
+	private static void checkPassword(char[] password) {
+		if (password == null || password.length < MIN_PASSWORD) {
+			throw new IllegalArgumentException("密码长度不足");
+		}
+	}
+
+	private static byte[] randomBytes(int length) {
+		byte[] bytes = new byte[length];
+		RANDOM.nextBytes(bytes);
+		return bytes;
+	}
+
+	private static void setPassword(Map<String, String> fields, byte[] secret, char[] password) {
+		fields.put("kdf", "argon2id");
+		fields.put("kdf.version", "19");
+		fields.put("kdf.memoryKiB", Integer.toString(MEMORY_KIB));
+		fields.put("kdf.iterations", Integer.toString(ITERATIONS));
+		fields.put("kdf.parallelism", Integer.toString(PARALLELISM));
+		fields.put("kdf.length", "32");
+		fields.put("password.salt", Base64.getEncoder().encodeToString(randomBytes(16)));
+		byte[] wrappingKey = passwordWrappingKey(fields, password);
+		try {
+			fields.put("password.wrap", Base64.getEncoder().encodeToString(
+					NoteCipher.seal(wrappingKey, aad(fields, "password"), secret)));
+		} finally {
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	private static MasterKey unlockPassword(Map<String, String> fields, char[] password) throws WrongKeyException {
+		byte[] wrappingKey = passwordWrappingKey(fields, password);
+		try {
+			return unwrap(fields, "password", wrappingKey);
+		} finally {
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	private static MasterKey unwrap(Map<String, String> fields, String purpose, byte[] wrappingKey)
+			throws WrongKeyException {
+		byte[] secret = NoteCipher.open(wrappingKey, aad(fields, purpose), decode(fields.get(purpose + ".wrap"), 60));
+		try {
+			return new MasterKey(secret);
+		} finally {
+			NoteCipher.wipe(secret);
+		}
+	}
+
+	private static byte[] passwordWrappingKey(Map<String, String> fields, char[] password) {
+		if (password == null) {
+			throw new IllegalArgumentException("密码不能为空");
+		}
+		char[] copy = password.clone();
+		ByteBuffer encoded = null;
+		byte[] bytes = null;
+		byte[] salt = null;
+		Hash hash = null;
+		try {
+			// 不把密码转成不可清零的 String；拒绝不完整的 UTF-16，避免编码碰撞。
+			encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(copy));
+			bytes = new byte[encoded.remaining()];
+			encoded.get(bytes);
+			salt = decode(fields.get("password.salt"), 16);
+			Argon2Function argon2 = Argon2Function.getInstance(
+					Integer.parseInt(fields.get("kdf.memoryKiB")), Integer.parseInt(fields.get("kdf.iterations")),
+					Integer.parseInt(fields.get("kdf.parallelism")), MasterKey.LENGTH, Argon2.ID,
+					Argon2Function.ARGON2_VERSION_13);
+			hash = argon2.hash(bytes, salt);
+			return hash.getBytes().clone();
+		} catch (CharacterCodingException e) {
+			throw new IllegalArgumentException("密码含无效字符");
+		} finally {
+			Arrays.fill(copy, '\0');
+			if (encoded != null && encoded.hasArray()) {
+				NoteCipher.wipe(encoded.array());
+			}
+			NoteCipher.wipe(bytes);
+			NoteCipher.wipe(salt);
+			if (hash != null) {
+				// password4j 还生成了 PHC 编码副本，和原始派生值一起清零，不写入 keyring。
+				NoteCipher.wipe(hash.getBytes());
+				NoteCipher.wipe(hash.getResultAsBytes());
+			}
+		}
+	}
+
+	private static String setRecovery(Map<String, String> fields, byte[] secret) {
+		byte[] recovery = randomBytes(16);
+		byte[] salt = randomBytes(16);
+		byte[] wrappingKey = null;
+		try {
+			fields.put("recovery.kdf", "HKDF-SHA-256");
+			fields.put("recovery.salt", Base64.getEncoder().encodeToString(salt));
+			wrappingKey = recoveryWrappingKey(recovery, salt);
+			fields.put("recovery.wrap", Base64.getEncoder().encodeToString(
+					NoteCipher.seal(wrappingKey, aad(fields, "recovery"), secret)));
+			return encodeRecovery(recovery);
+		} finally {
+			NoteCipher.wipe(recovery);
+			NoteCipher.wipe(wrappingKey);
+			NoteCipher.wipe(salt);
+		}
+	}
+
+	private static byte[] recoveryWrappingKey(byte[] recovery, byte[] salt) {
+		try {
+			// 随机恢复码已有 128 位熵；使用 JDK 的 RFC 5869 实现，并隔离用途。
+			return KDF.getInstance("HKDF-SHA256").deriveData(HKDFParameterSpec.ofExtract()
+					.addIKM(recovery).addSalt(salt)
+					.thenExpand((DOMAIN + "recovery").getBytes(StandardCharsets.UTF_8), MasterKey.LENGTH));
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("无法执行 HKDF-SHA-256");
+		} finally {
+			NoteCipher.wipe(salt);
+		}
+	}
+
+	private static byte[] aad(Map<String, String> fields, String purpose) {
+		// 版本、用途和本包装的 KDF 元数据都受认证；两个包装互不依赖，允许独立轮换。
+		String metadata = purpose.equals("password")
+				? fields.get("kdf") + "|" + fields.get("kdf.version") + "|" + fields.get("kdf.memoryKiB")
+						+ "|" + fields.get("kdf.iterations") + "|" + fields.get("kdf.parallelism")
+						+ "|" + fields.get("kdf.length") + "|" + fields.get("password.salt")
+				: fields.get("recovery.kdf") + "|" + fields.get("recovery.salt");
+		return (DOMAIN + purpose + "|" + metadata).getBytes(StandardCharsets.UTF_8);
+	}
+
+	/** v1 是严格的 key=value 文本，不支持 Properties 的转义、续行或重复字段。 */
+	private static Map<String, String> parse(String content) {
+		if (content == null || content.length() > 4096) {
+			throw invalidContent();
+		}
+		Map<String, String> fields = new LinkedHashMap<>();
+		for (String line : content.split("\r?\n", -1)) {
+			if (line.isEmpty()) {
+				continue;
+			}
+			int equals = line.indexOf('=');
+			if (equals < 1) {
+				throw invalidContent();
+			}
+			String name = line.substring(0, equals);
+			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name))
+					|| fields.putIfAbsent(name, line.substring(equals + 1)) != null) {
+				throw invalidContent();
+			}
+		}
+		if (!fields.keySet().containsAll(PASSWORD_FIELDS)
+				|| !"1".equals(fields.get("version")) || !"argon2id".equals(fields.get("kdf"))
+				|| !"19".equals(fields.get("kdf.version")) || !"32".equals(fields.get("kdf.length"))) {
+			throw invalidContent();
+		}
+		// 先验证公开格式和资源上限，再执行昂贵的 KDF，防止恶意参数耗尽内存。
+		int memory = number(fields.get("kdf.memoryKiB"), 262144);
+		int iterations = number(fields.get("kdf.iterations"), 10);
+		int parallelism = number(fields.get("kdf.parallelism"), 4);
+		if (memory < 8 * parallelism || (long) memory * iterations > 786432) {
+			throw invalidContent();
+		}
+		decode(fields.get("password.salt"), 16);
+		decode(fields.get("password.wrap"), 60);
+		if (RECOVERY_FIELDS.stream().anyMatch(fields::containsKey)) {
+			if (!fields.keySet().containsAll(RECOVERY_FIELDS) || !"HKDF-SHA-256".equals(fields.get("recovery.kdf"))) {
+				throw invalidContent();
+			}
+			decode(fields.get("recovery.salt"), 16);
+			decode(fields.get("recovery.wrap"), 60);
+		}
+		return fields;
+	}
+
+	private static int number(String text, int maximum) {
+		if (text == null || !text.matches("[1-9][0-9]{0,5}")) {
+			throw invalidContent();
+		}
+		int value = Integer.parseInt(text);
+		if (value > maximum) {
+			throw invalidContent();
+		}
+		return value;
+	}
+
+	private static byte[] decode(String text, int length) {
+		try {
+			byte[] bytes = Base64.getDecoder().decode(text);
+			// 只比较公开的编码格式；秘密和认证标签不在应用代码中比较。
+			if (bytes.length != length || !Base64.getEncoder().encodeToString(bytes).equals(text)) {
+				throw invalidContent();
+			}
+			return bytes;
+		} catch (IllegalArgumentException e) {
+			throw invalidContent();
+		}
+	}
+
+	private static IllegalArgumentException invalidContent() {
+		return new IllegalArgumentException("钥匙圈格式、版本或参数不受支持");
+	}
+
+	private static String serialize(Map<String, String> fields) {
+		StringBuilder result = new StringBuilder();
+		fields.forEach((name, value) -> result.append(name).append('=').append(value).append('\n'));
+		return result.toString();
+	}
+
+	private static String encodeRecovery(byte[] bytes) {
+		// RFC 4648：高位优先，每 5 位一个字符；128 位得到 26 个字符，末尾补零位而非 '='。
+		char[] text = new char[32];
+		try {
+			int at = 0;
+			for (int i = 0; i < 26; i++) {
+				if (i > 0 && i % 4 == 0) {
+					text[at++] = '-';
+				}
+				int value = 0;
+				for (int bit = 0; bit < 5; bit++) {
+					int position = i * 5 + bit;
+					value = (value << 1) | (position < 128 ? (bytes[position / 8] >>> (7 - position % 8)) & 1 : 0);
+				}
+				text[at++] = BASE32.charAt(value);
+			}
+			return new String(text);
+		} finally {
+			Arrays.fill(text, '\0');
+		}
+	}
+
+	private static byte[] decodeRecovery(String text) throws WrongKeyException {
+		if (text == null) {
+			throw NoteCipher.wrongKey();
+		}
+		byte[] bytes = new byte[16];
+		boolean returned = false;
+		try {
+			int count = 0;
+			int buffer = 0;
+			int bits = 0;
+			int at = 0;
+			for (int i = 0; i < text.length(); i++) {
+				char c = text.charAt(i);
+				if (c == '-' || Character.isWhitespace(c) || Character.isSpaceChar(c)) {
+					continue;
+				}
+				if (c >= 'a' && c <= 'z') {
+					c -= 'a' - 'A';
+				}
+				int value = BASE32.indexOf(c);
+				if (value < 0 || ++count > 26) {
+					throw NoteCipher.wrongKey();
+				}
+				buffer = (buffer << 5) | value;
+				bits += 5;
+				if (bits >= 8) {
+					bits -= 8;
+					bytes[at++] = (byte) (buffer >>> bits);
+					buffer &= (1 << bits) - 1;
+				}
+			}
+			// 拒绝非零尾部填充位，避免同一个恢复码出现不同的有效文本。
+			if (count != 26 || buffer != 0) {
+				throw NoteCipher.wrongKey();
+			}
+			returned = true;
+			return bytes;
+		} finally {
+			if (!returned) {
+				NoteCipher.wipe(bytes);
+			}
+		}
 	}
 }

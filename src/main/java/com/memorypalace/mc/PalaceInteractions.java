@@ -21,6 +21,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.gameevent.GameEvent;
+import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.vault.NoteLocations;
 import net.minecraft.world.level.block.ChiseledBookShelfBlock;
 import net.minecraft.world.level.block.LecternBlock;
@@ -41,7 +42,8 @@ import java.util.UUID;
  * - 对着雕纹书架上插着笔记书的那一格右键 → 打开笔记；潜行 + 右键 → 原版行为（取出书）
  */
 public final class PalaceInteractions {
-	private static final long MAX_FILE_BYTES = 512 * 1024;
+	// 再大的笔记，排版和渲染都会很慢；超过这个大小请拆分（约 70 万汉字 / 200 万字母）
+	private static final long MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 	private PalaceInteractions() {}
 
@@ -58,6 +60,7 @@ public final class PalaceInteractions {
 			}
 			// 客户端也返回 SUCCESS，挡住原版在客户端直接打开看书界面
 			if (player instanceof ServerPlayer serverPlayer) {
+				refreshBook(stack, id.get());
 				openNote(serverPlayer, id.get());
 			}
 			return InteractionResult.SUCCESS;
@@ -79,6 +82,9 @@ public final class PalaceInteractions {
 				Optional<UUID> id = NoteBooks.idOf(lectern.getBook());
 				if (id.isEmpty()) {
 					return InteractionResult.PASS;
+				}
+				if (refreshBook(lectern.getBook(), id.get())) {
+					lectern.setChanged();
 				}
 				openNote(serverPlayer, id.get());
 				recordLocation(level, hit.getBlockPos(), NoteLocations.LECTERN_SLOT, id.get());
@@ -122,10 +128,19 @@ public final class PalaceInteractions {
 			if (id.isEmpty()) {
 				return InteractionResult.PASS;
 			}
+			if (refreshBook(shelfEntity.getItem(slot.getAsInt()), id.get())) {
+				shelfEntity.setChanged();
+			}
 			openNote(serverPlayer, id.get());
 			recordLocation(level, hit.getBlockPos(), slot.getAsInt(), id.get());
 			return InteractionResult.SUCCESS;
 		});
+	}
+
+	/** 书名跟笔记现状对不上（改了标题、被加密了）就顺手改掉。 */
+	private static boolean refreshBook(ItemStack stack, UUID id) {
+		Vault vault = PalaceServer.vault();
+		return vault != null && vault.find(id).map(note -> NoteBooks.refresh(stack, note)).orElse(false);
 	}
 
 	/** 自动记下"这篇笔记在这里"，给 /palace where 用。记录失败不影响看笔记。 */
@@ -189,10 +204,18 @@ public final class PalaceInteractions {
 				}
 				return false;
 			}
-			ServerPlayNetworking.send(player, new OpenNotePayload(id,
-					OpenNotePayload.clip(note.get().title(), OpenNotePayload.MAX_TITLE),
-					OpenNotePayload.clip(body.get(), OpenNotePayload.MAX_BODY),
-					refresh));
+			// 文件开头标着"已加密"，正文却不是密文（比如在外部编辑器里被改成了明文）：
+			// 不能当普通笔记打开，否则会绕过加密的所有保护
+			if (note.get().encrypted() != NoteCipher.isEncrypted(body.get())) {
+				if (!refresh) {
+					player.sendSystemMessage(Component.translatable("message.memorypalace.encryption_mismatch"));
+				}
+				return false;
+			}
+			// 分块发送，客户端收齐再拼，正文一个字都不截
+			for (OpenNotePayload part : OpenNotePayload.split(id, note.get().title(), body.get(), refresh)) {
+				ServerPlayNetworking.send(player, part);
+			}
 			return true;
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("读取笔记 {} 失败", id, e);

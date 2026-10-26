@@ -1,6 +1,10 @@
 package com.memorypalace.client;
 
 import com.memorypalace.client.book.BookSettings;
+import com.memorypalace.client.crypto.ClientKeys;
+import com.memorypalace.client.crypto.PasswordScreen;
+import com.memorypalace.client.crypto.RecoveryKeyScreen;
+import com.memorypalace.core.crypto.KeyRing;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -9,9 +13,22 @@ import net.minecraft.network.chat.Component;
 
 /**
  * 记忆宫殿设置。从 Mod Menu（模组列表里的设置按钮）或"打开设置"快捷键进入。
+ * 密码相关的按钮只有在世界里（单人游戏）才能用，因为钥匙圈存在当前世界的笔记库里。
  */
 public class SettingsScreen extends Screen {
+	private static final int COLUMN = 150;
+	private static final int GAP = 10;
+	private static final int ROW = 24;
+	// 标题 + 栏目名 + 4 行按钮 + "完成" + 提示信息 的总高度
+	private static final int CONTENT_HEIGHT = 16 + 14 + 4 * ROW + 8 + 20 + 16;
+
 	private final Screen parent;
+	private Component message = Component.empty();
+
+	/** 第一行按钮的 y：整块内容垂直居中，但至少离顶部留出标题的位置。 */
+	private int buttonsTop() {
+		return Math.max(32, (this.height - CONTENT_HEIGHT) / 2 + 30);
+	}
 
 	public SettingsScreen(Screen parent) {
 		super(Component.translatable("settings.memorypalace.title"));
@@ -20,18 +37,111 @@ public class SettingsScreen extends Screen {
 
 	@Override
 	protected void init() {
-		int x = this.width / 2 - 100;
-		int y = this.height / 4 + 24;
+		// 两栏：左边"阅读"，右边"加密笔记密码"，整体按内容高度垂直居中（小窗口、大界面缩放也放得下）
+		int left = this.width / 2 - COLUMN - GAP / 2;
+		int right = this.width / 2 + GAP / 2;
+		int y = buttonsTop();
 		addRenderableWidget(Button.builder(pageSizeLabel(), b -> {
 			BookSettings.setPageSize(BookSettings.next(BookSettings.pageSize()));
 			b.setMessage(pageSizeLabel());
-		}).bounds(x, y, 200, 20).build());
+		}).bounds(left, y, COLUMN, 20).build());
 		addRenderableWidget(Button.builder(fontSizeLabel(), b -> {
 			BookSettings.setFontSize(BookSettings.next(BookSettings.fontSize()));
 			b.setMessage(fontSizeLabel());
-		}).bounds(x, y + 24, 200, 20).build());
+		}).bounds(left, y + ROW, COLUMN, 20).build());
+		addRenderableWidget(Button.builder(autoLockLabel(), b -> {
+			BookSettings.setAutoLock(BookSettings.next(BookSettings.autoLock()));
+			b.setMessage(autoLockLabel());
+		}).bounds(left, y + 2 * ROW, COLUMN, 20).build());
+
+		// 密码相关：都要先输入当前密码证明是本人
+		boolean inWorld = this.minecraft.player != null && this.minecraft.hasSingleplayerServer();
+		Button change = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.change_password"),
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+						Component.translatable("crypto.memorypalace.verify_change"), this,
+						(password, key) -> this.minecraft.gui.setScreen(
+								PasswordScreen.newPassword(keyring, key, this, () -> this.minecraft.gui.setScreen(this)))))))
+				.bounds(right, y, COLUMN, 20).build());
+		Button regen = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.new_recovery"),
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+						Component.translatable("crypto.memorypalace.verify_recovery"), this, (password, key) -> {
+							try {
+								// 密码只在这个回调里有效（回调结束就清零），所以"带新恢复密钥"和"不带恢复密钥"两个版本现在就算好
+								KeyRing.Created created = KeyRing.regenerateRecovery(keyring, password);
+								created.key().destroy(); // 多解出来的一份主密钥，用不着
+								String without = KeyRing.removeRecovery(keyring, password);
+								ClientKeys.writeKeyring(created.content(), keyring, ok -> {
+									if (!ok) {
+										this.minecraft.gui.setScreen(this);
+										return;
+									}
+									this.minecraft.gui.setScreen(new RecoveryKeyScreen(created.recoveryKey(),
+											() -> this.minecraft.gui.setScreen(this),
+											// 选择"不使用恢复密钥"：写入不带恢复密钥的版本
+											() -> writeAndShow(without, created.content(), "settings.memorypalace.recovery_removed")));
+								});
+							} catch (Exception e) {
+								this.minecraft.gui.setScreen(this);
+								show("crypto.memorypalace.error");
+							}
+						}))))
+				.bounds(right, y + ROW, COLUMN, 20).build());
+		Button remove = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.remove_recovery"),
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+						Component.translatable("crypto.memorypalace.verify_remove_recovery"), this, (password, key) -> {
+							try {
+								writeAndShow(KeyRing.removeRecovery(keyring, password), keyring, "settings.memorypalace.recovery_removed");
+							} catch (Exception e) {
+								this.minecraft.gui.setScreen(this);
+								show("crypto.memorypalace.error");
+							}
+						}))))
+				.bounds(right, y + 2 * ROW, COLUMN, 20).build());
+		// 忘记密码：用恢复密钥重置（原密码没有保存，无法找回）
+		Button forgot = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.forgot_password"),
+				b -> withKeyring(keyring -> {
+					if (!hasRecovery(keyring)) {
+						show("settings.memorypalace.no_recovery");
+						return;
+					}
+					this.minecraft.gui.setScreen(PasswordScreen.recover(keyring, this, () -> this.minecraft.gui.setScreen(this)));
+				}))
+				.bounds(right, y + 3 * ROW, COLUMN, 20).build());
+		change.active = regen.active = remove.active = forgot.active = inWorld;
+
 		addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
-				.bounds(x, y + 72, 200, 20).build());
+				.bounds(this.width / 2 - 100, y + 4 * ROW + 8, 200, 20).build());
+	}
+
+	private static boolean hasRecovery(String keyring) {
+		try {
+			return KeyRing.hasRecovery(keyring);
+		} catch (RuntimeException e) {
+			return false;
+		}
+	}
+
+	/** 拿到钥匙圈再继续；还没启用过加密就提示一下。 */
+	private void withKeyring(java.util.function.Consumer<String> then) {
+		ClientKeys.withKeyring(keyring -> {
+			if (keyring.isEmpty()) {
+				show("message.memorypalace.no_keyring");
+			} else {
+				then.accept(keyring);
+			}
+		});
+	}
+
+	/** 写钥匙圈，等服务端确认存盘后回到设置页并显示结果（失败时 ClientKeys 会在聊天栏说明原因）。 */
+	private void writeAndShow(String newContent, String oldContent, String successKey) {
+		ClientKeys.writeKeyring(newContent, oldContent, ok -> {
+			this.minecraft.gui.setScreen(this);
+			show(ok ? successKey : "crypto.memorypalace.error");
+		});
+	}
+
+	private void show(String key) {
+		message = Component.translatable(key);
 	}
 
 	private static Component pageSizeLabel() {
@@ -42,12 +152,21 @@ public class SettingsScreen extends Screen {
 		return Component.translatable("settings.memorypalace.fontsize", BookSettings.label(BookSettings.fontSize()));
 	}
 
+	private static Component autoLockLabel() {
+		return Component.translatable("settings.memorypalace.autolock", BookSettings.label(BookSettings.autoLock()));
+	}
+
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(this.font, this.title, this.width / 2, this.height / 4, 0xFFFFFFFF);
-		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.hint"),
-				this.width / 2, this.height / 4 + 76, 0xFFA0A0A0);
+		int y = buttonsTop();
+		graphics.centeredText(this.font, this.title, this.width / 2, y - 30, 0xFFFFFFFF);
+		// 两栏各自的栏目名
+		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.reading_section"),
+				this.width / 2 - GAP / 2 - COLUMN / 2, y - 12, 0xFFA0A0A0);
+		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.password_section"),
+				this.width / 2 + GAP / 2 + COLUMN / 2, y - 12, 0xFFA0A0A0);
+		graphics.centeredText(this.font, message, this.width / 2, y + 4 * ROW + 34, 0xFFFFE080);
 	}
 
 	@Override

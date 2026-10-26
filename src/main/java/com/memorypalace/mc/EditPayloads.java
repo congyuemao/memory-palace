@@ -1,6 +1,8 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -24,13 +26,17 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class EditPayloads {
 	/** 每块最多这么多字符：中文 3 字节/字，8000 字 ≈ 24KB，在 32KB 上限以内。 */
 	public static final int CHUNK_CHARS = 8000;
-	private static final int MAX_CHUNKS = 64;
+	// 512 块 × 8000 字符 ≈ 400 万字符：加密后的长日记（密文约是明文的 4 倍）也放得下
+	private static final int MAX_CHUNKS = 512;
+	/** expectedHash 以它开头表示"这是一次解除加密"：只有这种保存才允许把加密笔记写成明文。 */
+	public static final String DECRYPT_PREFIX = "decrypt:";
 
 	private EditPayloads() {}
 
 	/**
 	 * 客户端 → 服务端：正文的第 index 块（共 total 块）。
-	 * expectedHash 是编辑器打开时旧正文的指纹，"" 表示强制覆盖。session 区分同一个玩家的不同次保存。
+	 * expectedHash 是编辑器打开时旧正文的指纹，"" 表示强制覆盖；前面加 DECRYPT_PREFIX 表示解除加密。
+	 * session 区分同一个玩家的不同次保存。
 	 */
 	public record SaveChunk(UUID noteId, int session, int index, int total, String expectedHash, String part)
 			implements CustomPacketPayload {
@@ -40,7 +46,7 @@ public final class EditPayloads {
 				ByteBufCodecs.VAR_INT, SaveChunk::session,
 				ByteBufCodecs.VAR_INT, SaveChunk::index,
 				ByteBufCodecs.VAR_INT, SaveChunk::total,
-				ByteBufCodecs.stringUtf8(64), SaveChunk::expectedHash,
+				ByteBufCodecs.stringUtf8(80), SaveChunk::expectedHash,
 				ByteBufCodecs.stringUtf8(CHUNK_CHARS), SaveChunk::part,
 				SaveChunk::new);
 
@@ -119,9 +125,20 @@ public final class EditPayloads {
 			reply(player, chunk, "ERROR", "");
 			return;
 		}
+		String guard = a.expectedHash();
+		boolean decrypt = guard.startsWith(DECRYPT_PREFIX);
+		if (decrypt) {
+			guard = guard.substring(DECRYPT_PREFIX.length());
+		}
+		// 加密笔记只能通过"解除加密"变回明文（要本机房主）；普通保存写入明文会被拒绝，
+		// 防止热重载等情况下界面状态不对，把解密后的内容悄悄以明文存回去
+		boolean wasEncrypted = vault.find(chunk.noteId()).map(NoteSummary::encrypted).orElse(false);
+		if (wasEncrypted && !NoteCipher.isEncrypted(body) && (!decrypt || !CryptoPayloads.allowed(player))) {
+			reply(player, chunk, "REFUSED", "");
+			return;
+		}
 		try {
-			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body,
-					a.expectedHash().isEmpty() ? null : a.expectedHash());
+			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body, guard.isEmpty() ? null : guard);
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);

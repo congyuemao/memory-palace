@@ -1,5 +1,7 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.NoteCipher;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
@@ -93,6 +95,12 @@ public final class Vault {
 			}
 			FrontMatter.Parsed parsed = FrontMatter.parse(text);
 			UUID id = parsed.id();
+			boolean encrypted = parsed.fields().containsKey("palace-encrypted") || NoteCipher.isEncrypted(parsed.body());
+			if (encrypted && (id == null || newIndex.containsKey(id))) {
+				// 加密笔记的密文绑定了原来的 ID：绝不能改它的 ID（改了就再也解不开）。
+				// 重复或缺 ID 的加密文件先不收录，原样保留在硬盘上
+				continue;
+			}
 			if (id == null || newIndex.containsKey(id)) {
 				do {
 					id = UUID.randomUUID();
@@ -105,12 +113,12 @@ public final class Vault {
 				}
 			}
 			String name = file.getFileName().toString();
-			String title = parsed.body().lines()
+			// 标记存在即隐藏正文标题，即使文件内容不一致也不能泄露标题。
+			String title = encrypted ? name.substring(0, name.length() - 3) : parsed.body().lines()
 					.filter(line -> line.startsWith("# "))
 					.map(line -> line.substring(2).strip())
 					.findFirst().orElse(name.substring(0, name.length() - 3));
-			// TODO(Codex): 按 NoteSummary 的说明识别加密笔记（标题用文件名、encrypted = true）
-			NoteSummary note = new NoteSummary(id, relativePath(file), title, false);
+			NoteSummary note = new NoteSummary(id, relativePath(file), title, encrypted);
 			newIndex.put(id, note);
 			newNotes.add(note);
 		}
@@ -270,7 +278,8 @@ public final class Vault {
 				if (text != null) {
 					FrontMatter.Parsed parsed = FrontMatter.parse(text);
 					if (id.equals(parsed.id())) {
-						if (expectedHash != null && !hash(parsed.body()).equals(expectedHash)) {
+						if (expectedHash != null && !MessageDigest.isEqual(hash(parsed.body()).getBytes(StandardCharsets.UTF_8),
+								expectedHash.getBytes(StandardCharsets.UTF_8))) {
 							return WriteResult.CONFLICT;
 						}
 						String newline = text.contains("\r\n") ? "\r\n" : "\n";
@@ -278,6 +287,7 @@ public final class Vault {
 						// 正文是原文的后缀，直接截取可保留字段格式、注释和空白。
 						String frontMatter = text.substring(text.startsWith("\uFEFF") ? 1 : 0,
 								text.length() - parsed.body().length());
+						frontMatter = withEncryptionFlag(frontMatter, NoteCipher.isEncrypted(body), newline);
 						if (!body.isEmpty() && !frontMatter.endsWith("\n")) {
 							frontMatter += newline;
 						}
@@ -369,6 +379,40 @@ public final class Vault {
 		}
 		scan();
 		return find(id).orElseThrow(() -> new IOException("新笔记未能加入索引"));
+	}
+
+	/** 输入是已解析、去 BOM 的完整 front matter；只编辑加密标记行。 */
+	private static String withEncryptionFlag(String frontMatter, boolean encrypted, String newline) {
+		int start = frontMatter.indexOf('\n') + 1;
+		StringBuilder result = new StringBuilder(frontMatter.substring(0, start));
+		boolean inserted = false;
+		while (start < frontMatter.length()) {
+			int lf = frontMatter.indexOf('\n', start);
+			int next = lf < 0 ? frontMatter.length() : lf + 1;
+			int end = lf < 0 ? frontMatter.length() : lf;
+			if (lf >= 0 && end > start && frontMatter.charAt(end - 1) == '\r') {
+				end--;
+			}
+			String line = frontMatter.substring(start, end);
+			if (line.stripTrailing().equals("---")) {
+				if (encrypted && !inserted) {
+					result.append("palace-encrypted: v1").append(newline);
+				}
+				return result.append(frontMatter, start, frontMatter.length()).toString();
+			}
+			int colon = line.indexOf(':');
+			if (colon >= 0 && line.substring(0, colon).strip().equals("palace-encrypted")) {
+				// 合并重复标记，解密时移除全部标记；不重序列化其他字段。
+				if (encrypted && !inserted) {
+					result.append("palace-encrypted: v1").append(frontMatter, end, next);
+					inserted = true;
+				}
+			} else {
+				result.append(frontMatter, start, next);
+			}
+			start = next;
+		}
+		throw new IllegalArgumentException("front matter 缺少结束标记");
 	}
 
 	private String relativePath(Path file) {

@@ -42,9 +42,21 @@ public final class BookSettings {
 		}
 	}
 
+	/** 多久没碰加密笔记就自动上锁。minutes = 0 表示不自动上锁（退出世界时仍然会锁）。 */
+	public enum AutoLock {
+		MIN_1(1), MIN_5(5), MIN_10(10), MIN_30(30), NEVER(0);
+
+		public final int minutes;
+
+		AutoLock(int minutes) {
+			this.minutes = minutes;
+		}
+	}
+
 	private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("memorypalace.properties");
 	private static PageSize pageSize = PageSize.FIT;
 	private static FontSize fontSize = FontSize.NORMAL;
+	private static AutoLock autoLock = AutoLock.MIN_10;
 	private static boolean loaded;
 
 	private BookSettings() {}
@@ -57,6 +69,16 @@ public final class BookSettings {
 	public static FontSize fontSize() {
 		load();
 		return fontSize;
+	}
+
+	public static AutoLock autoLock() {
+		load();
+		return autoLock;
+	}
+
+	public static void setAutoLock(AutoLock value) {
+		autoLock = value;
+		save();
 	}
 
 	public static void setPageSize(PageSize value) {
@@ -93,6 +115,7 @@ public final class BookSettings {
 			p.load(r);
 			pageSize = parse(PageSize.class, p.getProperty("page_size"), PageSize.FIT);
 			fontSize = parse(FontSize.class, p.getProperty("font_size"), FontSize.NORMAL);
+			autoLock = parse(AutoLock.class, p.getProperty("auto_lock"), AutoLock.MIN_10);
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.warn("读取设置失败，使用默认值", e);
 		}
@@ -110,6 +133,7 @@ public final class BookSettings {
 		Properties p = new Properties();
 		p.setProperty("page_size", pageSize.name());
 		p.setProperty("font_size", fontSize.name());
+		p.setProperty("auto_lock", autoLock.name());
 		try (Writer w = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {
 			p.store(w, "Memory Palace settings");
 		} catch (IOException e) {

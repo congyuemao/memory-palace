@@ -71,6 +71,36 @@ class VaultEncryptedTest {
 	}
 
 	@Test
+	void duplicateEncryptedFileIsNeverRewritten() throws IOException {
+		UUID id = UUID.randomUUID();
+		MasterKey key = KeyRing.create("password1".toCharArray(), false).key();
+		String content = "---\npalace-id: " + id + "\npalace-encrypted: v1\n---\n" + NoteCipher.encrypt(key, id, "日记");
+		// 副本的文件名排在原文件前面：以前会把"原文件"改 ID，导致它再也解不开
+		Files.writeString(dir.resolve("b-原文件.md"), content);
+		Files.writeString(dir.resolve("a-副本.md"), content);
+		var vault = new Vault(dir);
+		vault.scan();
+
+		// 两个文件都一个字节都不改
+		assertEquals(content, read("b-原文件.md"));
+		assertEquals(content, read("a-副本.md"));
+		// 只收录一个（字典序第一个），另一个暂不收录
+		assertEquals(1, vault.list().size());
+		assertEquals(id, vault.list().get(0).id());
+	}
+
+	@Test
+	void encryptedFileWithoutIdIsNotRewritten() throws IOException {
+		MasterKey key = KeyRing.create("password1".toCharArray(), false).key();
+		String content = "---\npalace-encrypted: v1\n---\n" + NoteCipher.encrypt(key, UUID.randomUUID(), "x");
+		Files.writeString(dir.resolve("丢了ID.md"), content);
+		var vault = new Vault(dir);
+		vault.scan();
+		assertEquals(content, read("丢了ID.md"), "加密笔记没有 ID 时也不能给它分配新 ID（密文绑定的是原 ID）");
+		assertTrue(vault.list().isEmpty());
+	}
+
+	@Test
 	void encryptedBodyWithoutFlagIsStillRecognized() throws IOException {
 		UUID id = UUID.randomUUID();
 		MasterKey key = KeyRing.create("password1".toCharArray(), false).key();

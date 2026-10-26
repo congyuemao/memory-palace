@@ -3,7 +3,10 @@ package com.memorypalace.client;
 import com.memorypalace.client.book.BookLayout;
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
+import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.render.NoteImageStore;
+import com.memorypalace.core.vault.Vault;
+import com.memorypalace.mc.OpenNotePayload;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
@@ -18,7 +21,8 @@ import java.util.UUID;
  * 书页大小、字体大小在设置里调（SettingsScreen）。
  */
 public class NoteScreen extends BookScreen {
-	private String body;
+	private String body;          // 明文（加密笔记已经解密）
+	private String storedHash;    // 文件里存的那份正文（加密笔记是密文）的指纹，编辑器保存时检查冲突用
 	private List<List<BookLine>> pages = List.of();
 	private int spread; // 第几个"对开页"，0 = 第 1、2 页
 
@@ -32,13 +36,19 @@ public class NoteScreen extends BookScreen {
 	}
 
 	public NoteScreen(UUID noteId, Component title, String body) {
-		super(noteId, title);
+		this(noteId, title, body, false, Vault.hash(body));
+	}
+
+	public NoteScreen(UUID noteId, Component title, String body, boolean encrypted, String storedHash) {
+		super(noteId, title, encrypted);
 		this.body = body;
+		this.storedHash = storedHash;
 	}
 
 	/** 文件在外部被改了：换上新内容，尽量停在原来那一页。 */
-	public void updateBody(String newBody) {
+	public void updateBody(String newBody, String newStoredHash) {
 		this.body = newBody;
+		this.storedHash = newStoredHash;
 		// 外部可能换了图片：重新请求这篇笔记的图
 		NoteImageStore.forget(noteId);
 		relayout();
@@ -47,6 +57,9 @@ public class NoteScreen extends BookScreen {
 	@Override
 	protected void init() {
 		super.init();
+		if (closeIfLocked()) {
+			return;
+		}
 		relayout();
 		int buttonY = top + pageH - 25;
 		// 原版翻页按钮（自带翻书声），放在左页左下角和右页右下角
@@ -73,7 +86,12 @@ public class NoteScreen extends BookScreen {
 	}
 
 	private void openEditor() {
-		this.minecraft.gui.setScreen(new EditorScreen(noteId, this.title, body));
+		// 游戏内输入框处理不了太长的文本，超过上限会被截断——截断后一保存就丢了后半段，所以干脆不打开
+		if (body.length() > OpenNotePayload.MAX_BODY) {
+			this.minecraft.player.sendSystemMessage(Component.translatable("message.memorypalace.too_long_to_edit", OpenNotePayload.MAX_BODY));
+			return;
+		}
+		this.minecraft.gui.setScreen(new EditorScreen(noteId, this.title, body, encrypted, storedHash));
 	}
 
 	private int maxSpread() {
@@ -95,6 +113,9 @@ public class NoteScreen extends BookScreen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		if (encrypted && !ClientKeys.unlocked()) {
+			return; // 已上锁：一帧都不画明文（界面马上会被关掉）
+		}
 		int leftIndex = spread * 2;
 		if (leftIndex < pages.size()) {
 			drawPage(graphics, pages.get(leftIndex), leftTextX());
@@ -112,10 +133,12 @@ public class NoteScreen extends BookScreen {
 			String n = (leftIndex + 2) + " / " + pages.size();
 			graphics.text(this.font, n, rightTextX() + textWidth() - this.font.width(n), indicatorY, BookLayout.MUTED, false);
 		}
+		drawLockWarning(graphics);
 	}
 
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
 		if (scrollY != 0) {
 			flip(scrollY < 0 ? 1 : -1);
 		}

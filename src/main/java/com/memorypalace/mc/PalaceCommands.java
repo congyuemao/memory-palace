@@ -57,20 +57,80 @@ public final class PalaceCommands {
 						.then(Commands.literal("rescan").executes(PalaceCommands::rescan))
 						.then(Commands.literal("new")
 								.then(Commands.argument("path", StringArgumentType.greedyString())
-										.executes(PalaceCommands::create)))
+										.executes(ctx -> create(ctx, false))))
+						.then(Commands.literal("newsecret")
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(ctx -> create(ctx, true))))
+						.then(Commands.literal("encrypt")
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
+										.executes(ctx -> crypto(ctx, true))))
+						.then(Commands.literal("decrypt")
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
+										.executes(ctx -> crypto(ctx, false))))
+						.then(Commands.literal("lock").executes(ctx -> {
+							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
+							return 1;
+						}))
 						.then(Commands.literal("where")
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
 										.executes(PalaceCommands::where)))));
 	}
 
-	/** /palace new &lt;文件夹/文件名&gt;：新建笔记，给一本笔记书，并直接打开游戏内编辑器。 */
-	private static int create(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+	/**
+	 * /palace encrypt|decrypt &lt;笔记&gt;：服务端没有钥匙，所以只把正文发给客户端，由客户端加密/解密后存回来。
+	 */
+	private static int crypto(CommandContext<CommandSourceStack> ctx, boolean encrypt) throws CommandSyntaxException {
 		Vault vault = requireVault(ctx);
 		if (vault == null) {
 			return 0;
 		}
 		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		if (!CryptoPayloads.allowed(player)) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_denied"));
+			return 0;
+		}
+		String path = StringArgumentType.getString(ctx, "note").strip();
+		Optional<NoteSummary> note = vault.resolve(path);
+		if (note.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
+			return 0;
+		}
+		if (note.get().encrypted() == encrypt) {
+			ctx.getSource().sendFailure(Component.translatable(encrypt
+					? "command.memorypalace.already_encrypted" : "command.memorypalace.not_encrypted", note.get().title()));
+			return 0;
+		}
+		try {
+			String body = vault.readBody(note.get().id()).orElse("");
+			if ((encrypt && body.length() > CryptoPayloads.MAX_ACTION_BODY)
+					|| !CryptoPayloads.sendAction(player, note.get().id(), encrypt ? "encrypt" : "decrypt", note.get().title(), body)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
+				return 0;
+			}
+			return 1;
+		} catch (IOException e) {
+			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
+			return 0;
+		}
+	}
+
+	/**
+	 * /palace new &lt;文件夹/文件名&gt;：新建笔记，给一本笔记书，并直接打开游戏内编辑器。
+	 * /palace newsecret：同上，但先加密（客户端会要求解锁或第一次设置密码）。
+	 */
+	private static int create(CommandContext<CommandSourceStack> ctx, boolean secret) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		if (secret && !CryptoPayloads.allowed(player)) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_denied"));
+			return 0;
+		}
 		String path = StringArgumentType.getString(ctx, "path").strip();
 		NoteSummary note;
 		String body;
@@ -86,8 +146,13 @@ public final class PalaceCommands {
 			return 0;
 		}
 		player.getInventory().placeItemBackInInventory(NoteBooks.create(note), Prediction.SERVER_ONLY);
-		ServerPlayNetworking.send(player, new EditPayloads.OpenEditor(note.id(),
-				OpenNotePayload.clip(note.title(), OpenNotePayload.MAX_TITLE), body));
+		if (secret) {
+			CryptoPayloads.sendAction(player, note.id(), "encrypt_new", note.title(), body);
+		} else {
+			// 新建的笔记只有一行标题，一定在 MAX_BODY 以内
+			ServerPlayNetworking.send(player, new EditPayloads.OpenEditor(note.id(),
+					OpenNotePayload.clip(note.title(), OpenNotePayload.MAX_TITLE), body));
+		}
 		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.created", note.relativePath()), false);
 		return 1;
 	}

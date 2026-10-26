@@ -85,20 +85,21 @@ public final class PalaceServer {
 		Files.writeString(root.resolve("欢迎.md"), """
 				# 欢迎来到记忆宫殿
 
-				这个文件夹就是本世界的笔记库：
-				把 .md 文件放进来（可以建子文件夹），然后在游戏里输入：
+				本文件夹即为当前世界的笔记库。
+				将 .md 文件放入本文件夹（可建立子文件夹）后，在游戏中输入：
 
 				/palace give 欢迎
 
-				就会得到这篇笔记的笔记书。把它插进雕纹书架，
-				右键那一格就能打开；潜行 + 右键可以把书取出来。
-				也可以放在讲台上，右键阅读。
+				即可领取本笔记对应的笔记书。将其放入雕纹书架后，右键对应格子即可阅读；
+				潜行 + 右键可将书取出。笔记书也可放置于讲台上，右键阅读。
 
-				- /palace list 列出所有笔记
-				- /palace rescan 重新扫描文件夹
-				- /palace where 笔记名 查看这篇笔记挂在哪些书架上
+				- /palace list：列出所有笔记
+				- /palace rescan：重新扫描笔记库
+				- /palace where 笔记名：查看该笔记所在的书架与讲台
+				- /palace new 路径：新建笔记并在游戏内编辑
+				- /palace newsecret 路径：新建加密笔记
 
-				每次进入世界，笔记会自动备份到 .minecraft/memory-palace-backups/。
+				每次进入世界时，笔记库会自动备份至 .minecraft/memory-palace-backups/。
 				""", StandardCharsets.UTF_8);
 	}
 }

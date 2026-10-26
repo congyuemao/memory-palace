@@ -1,6 +1,11 @@
 package com.memorypalace.client.book;
 
 import com.memorypalace.client.book.BookLayout.BookLine;
+import com.memorypalace.client.crypto.ClientKeys;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.PreeditEvent;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.client.render.RasterTextures;
 import com.memorypalace.core.markdown.MarkdownParser;
@@ -43,19 +48,92 @@ public abstract class BookScreen extends Screen {
 	// 渲染失败过的公式（只在渲染线程用）
 	private static final java.util.Set<String> FAILED_MATH = new java.util.HashSet<>();
 
+	/** 上锁时调用：这里存着公式原文。 */
+	public static void clearMathFailures() {
+		FAILED_MATH.clear();
+	}
+
 	protected final UUID noteId; // 没有对应笔记（M 键说明页）时为 null
 
 	// 这次 init 时算好的尺寸（屏幕像素）
 	protected int pageW = VANILLA_W, pageH = VANILLA_H, top;
 	protected float fontScale = 1.0F;
 
-	protected BookScreen(UUID noteId, Component title) {
+	protected final boolean encrypted;
+
+	protected BookScreen(UUID noteId, Component title, boolean encrypted) {
 		super(title);
 		this.noteId = noteId;
+		this.encrypted = encrypted;
 	}
 
 	public UUID noteId() {
 		return noteId;
+	}
+
+	/** 正在显示加密笔记的明文（上锁时要关掉这个界面）。 */
+	public boolean isEncrypted() {
+		return encrypted;
+	}
+
+	// 在加密笔记里有任何操作都算"还在用"，推迟自动上锁
+
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		if (encrypted) ClientKeys.touch();
+		return super.keyPressed(event);
+	}
+
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		if (encrypted) ClientKeys.touch();
+		return super.charTyped(event);
+	}
+
+	@Override
+	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		if (encrypted) ClientKeys.touch();
+		return super.mouseClicked(event, doubleClick);
+	}
+
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		if (encrypted) ClientKeys.touch();
+		return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+	}
+
+	// 用输入法拼字时（拼音还在候选框里），游戏收不到"打字"，但这也是在写
+	@Override
+	public boolean preeditUpdated(PreeditEvent event) {
+		if (encrypted) ClientKeys.touch();
+		return super.preeditUpdated(event);
+	}
+
+	// 移动鼠标也算在用（比如正在看书、准备翻页）
+	@Override
+	public void mouseMoved(double mouseX, double mouseY) {
+		if (encrypted) ClientKeys.touch();
+		super.mouseMoved(mouseX, mouseY);
+	}
+
+	/**
+	 * 快要自动上锁时，在书页顶部画倒计时提醒（"30 秒后自动上锁，按任意键继续"）。
+	 * 子类在画完自己的内容后调用。
+	 */
+	protected void drawLockWarning(GuiGraphicsExtractor graphics) {
+		if (!encrypted) {
+			return;
+		}
+		long seconds = ClientKeys.secondsUntilLock();
+		if (seconds < 0 || seconds > ClientKeys.WARNING_SECONDS) {
+			return;
+		}
+		Component warning = Component.translatable("screen.memorypalace.lock_warning", seconds);
+		int y = Math.max(3, top - 12);
+		int w = this.font.width(warning);
+		// 深色底：书本贴着屏幕顶部时，文字会压在书框上
+		graphics.fill(spineX() - w / 2 - 4, y - 3, spineX() + w / 2 + 4, y + 11, 0xC0000000);
+		graphics.centeredText(this.font, warning, spineX(), y, 0xFFFFD040);
 	}
 
 	// ---- 尺寸 ----
@@ -111,6 +189,18 @@ public abstract class BookScreen extends Screen {
 	/** 图片到了要重新排版：子类在这里重新调用 layout。 */
 	protected abstract void relayout();
 
+	/**
+	 * 加密笔记界面在已上锁时不能显示：不管是从"确认放弃修改"对话框、设置页还是别的地方返回，
+	 * 每次（重新）打开都检查一遍。子类在 init 开头调用，返回 true 时直接 return。
+	 */
+	protected boolean closeIfLocked() {
+		if (encrypted && !ClientKeys.unlocked()) {
+			this.minecraft.execute(() -> this.minecraft.gui.setScreen(null));
+			return true;
+		}
+		return false;
+	}
+
 	@Override
 	protected void init() {
 		// 图片到了就重新排版（排版器会拿到新贴图）
@@ -158,7 +248,8 @@ public abstract class BookScreen extends Screen {
 
 		@Override
 		public BookLayout.Box image(String src) {
-			if (noteId == null || NoteImageStore.state(noteId, src) != NoteImageStore.State.READY) {
+			// 加密笔记里的图片路径来自解密后的正文，不能发给服务端；图片文件本身也没加密。暂不支持
+			if (encrypted || noteId == null || NoteImageStore.state(noteId, src) != NoteImageStore.State.READY) {
 				return null;
 			}
 			RasterTextures.Tex t = NoteImageStore.texture(noteId, src);
@@ -167,6 +258,9 @@ public abstract class BookScreen extends Screen {
 
 		@Override
 		public String imagePlaceholder(String src, String alt) {
+			if (encrypted) {
+				return Component.translatable("screen.memorypalace.image_encrypted").getString();
+			}
 			if (noteId != null && NoteImageStore.state(noteId, src) == NoteImageStore.State.LOADING) {
 				return Component.translatable("screen.memorypalace.image_loading").getString();
 			}
