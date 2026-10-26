@@ -11,5 +11,19 @@
 	"command.memorypalace.rescanned": "重新扫描完成，共 %s 篇笔记",
 	"key.memorypalace.open_note": "打开笔记窗口",
 	"key.category.memorypalace.main": "记忆宫殿",
-	"screen.memorypalace.note": "记忆宫殿 · 笔记"
+	"screen.memorypalace.note": "记忆宫殿 · 笔记",
+	"screen.memorypalace.open_external": "用外部编辑器打开",
+	"key.memorypalace.settings": "打开记忆宫殿设置",
+	"settings.memorypalace.title": "记忆宫殿设置",
+	"settings.memorypalace.hint": "书页变大时字号不变，一页能放更多行",
+	"settings.memorypalace.pagesize": "书页大小：%s",
+	"settings.memorypalace.pagesize.vanilla": "原版",
+	"settings.memorypalace.pagesize.medium": "中",
+	"settings.memorypalace.pagesize.large": "大",
+	"settings.memorypalace.pagesize.fit": "铺满屏幕",
+	"settings.memorypalace.fontsize": "字体大小：%s",
+	"settings.memorypalace.fontsize.normal": "正常",
+	"settings.memorypalace.fontsize.large": "大（1.5 倍）",
+	"settings.memorypalace.fontsize.xlarge": "特大（2 倍）",
+	"screen.memorypalace.empty_hint": "# 记忆宫殿\n\n还没有打开任何笔记。\n\n- 输入 `/palace give 欢迎` 领一本笔记书\n- 拿着书右键，或者把书插进**雕纹书架**再右键那一格\n- 潜行 + 右键可以把书取出来"
 }

@@ -11,5 +11,19 @@
 	"command.memorypalace.rescanned": "Rescan done, %s note(s)",
 	"key.memorypalace.open_note": "Open note window",
 	"key.category.memorypalace.main": "Memory Palace",
-	"screen.memorypalace.note": "Memory Palace · Note"
+	"screen.memorypalace.note": "Memory Palace · Note",
+	"screen.memorypalace.open_external": "Open in external editor",
+	"key.memorypalace.settings": "Open Memory Palace settings",
+	"settings.memorypalace.title": "Memory Palace Settings",
+	"settings.memorypalace.hint": "Bigger pages keep the font size and fit more lines",
+	"settings.memorypalace.pagesize": "Page size: %s",
+	"settings.memorypalace.pagesize.vanilla": "Vanilla",
+	"settings.memorypalace.pagesize.medium": "Medium",
+	"settings.memorypalace.pagesize.large": "Large",
+	"settings.memorypalace.pagesize.fit": "Fill screen",
+	"settings.memorypalace.fontsize": "Font size: %s",
+	"settings.memorypalace.fontsize.normal": "Normal",
+	"settings.memorypalace.fontsize.large": "Large (1.5x)",
+	"settings.memorypalace.fontsize.xlarge": "Extra large (2x)",
+	"screen.memorypalace.empty_hint": "# Memory Palace\n\nNo note is open yet.\n\n- Run `/palace give 欢迎` to get a note book\n- Right-click with the book, or put it in a **chiseled bookshelf** and right-click that slot\n- Sneak + right-click takes the book out"
 }

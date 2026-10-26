@@ -43,6 +43,8 @@ public final class PalaceInteractions {
 	private PalaceInteractions() {}
 
 	public static void register() {
+		NoteWatcher.register();
+
 		// 用 ItemEvents.USE 而不是 UseItemCallback：它在原版切换快捷栏同步之后才触发，
 		// 快速切换物品栏再右键时不会打开上一格的书。返回 null = 不处理，交给原版
 		ItemEvents.USE.register((level, player, hand) -> {
@@ -118,30 +120,51 @@ public final class PalaceInteractions {
 	}
 
 	public static void openNote(ServerPlayer player, UUID id) {
+		if (sendNote(player, id, false)) {
+			NoteWatcher.watch(player, id);
+		}
+	}
+
+	/**
+	 * 读笔记并发给玩家。refresh = true 是热重载推送：出错时不刷屏提示。
+	 * @return 是否发送成功
+	 */
+	static boolean sendNote(ServerPlayer player, UUID id, boolean refresh) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
-			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
-			return;
+			if (!refresh) {
+				player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
+			}
+			return false;
 		}
 		try {
 			// 单人游戏里读文件在服务端线程上，太大的文件会卡顿，先挡掉（多人版再改成后台读取）
 			Optional<Path> path = vault.pathOf(id);
 			if (path.isPresent() && Files.exists(path.get()) && Files.size(path.get()) > MAX_FILE_BYTES) {
-				player.sendSystemMessage(Component.translatable("message.memorypalace.note_too_large", MAX_FILE_BYTES / 1024));
-				return;
+				if (!refresh) {
+					player.sendSystemMessage(Component.translatable("message.memorypalace.note_too_large", MAX_FILE_BYTES / 1024));
+				}
+				return false;
 			}
 			Optional<String> body = vault.readBody(id);
 			Optional<NoteSummary> note = vault.find(id);
 			if (body.isEmpty() || note.isEmpty()) {
-				player.sendSystemMessage(Component.translatable("message.memorypalace.note_missing"));
-				return;
+				if (!refresh) {
+					player.sendSystemMessage(Component.translatable("message.memorypalace.note_missing"));
+				}
+				return false;
 			}
 			ServerPlayNetworking.send(player, new OpenNotePayload(id,
 					OpenNotePayload.clip(note.get().title(), OpenNotePayload.MAX_TITLE),
-					OpenNotePayload.clip(body.get(), OpenNotePayload.MAX_BODY)));
+					OpenNotePayload.clip(body.get(), OpenNotePayload.MAX_BODY),
+					refresh));
+			return true;
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("读取笔记 {} 失败", id, e);
-			player.sendSystemMessage(Component.translatable("message.memorypalace.read_failed"));
+			if (!refresh) {
+				player.sendSystemMessage(Component.translatable("message.memorypalace.read_failed"));
+			}
+			return false;
 		}
 	}
 }

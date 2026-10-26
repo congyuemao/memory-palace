@@ -20,22 +20,38 @@ public class MemoryPalaceClient implements ClientModInitializer {
 
 	// 默认 M 键打开笔记窗口，玩家可以在"按键设置"里改
 	private static KeyMapping openNoteKey;
+	private static KeyMapping settingsKey;
 
 	@Override
 	public void onInitializeClient() {
 		openNoteKey = KeyMappingHelper.registerKeyMapping(
 				new KeyMapping("key.memorypalace.open_note", InputConstants.KEY_M, CATEGORY));
 
+		// 设置快捷键默认不绑定（没装 Mod Menu 的玩家可以在"按键设置"里自己绑一个）
+		settingsKey = KeyMappingHelper.registerKeyMapping(
+				new KeyMapping("key.memorypalace.settings", InputConstants.UNKNOWN.getValue(), CATEGORY));
+
 		// 每个游戏刻（每秒 20 次）检查一次按键有没有被按下
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (openNoteKey.consumeClick()) {
 				client.gui.setScreen(new NoteScreen());
 			}
+			while (settingsKey.consumeClick()) {
+				client.gui.setScreen(new SettingsScreen(client.gui.screen()));
+			}
 		});
 
-		// 服务端说"打开这篇笔记" → 打开笔记窗口
-		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) ->
-				context.client().gui.setScreen(new NoteScreen(Component.literal(payload.title()), payload.body())));
+		// 服务端说"打开这篇笔记" → 打开笔记窗口；"刷新" → 只在还开着这篇时更新内容
+		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) -> {
+			var gui = context.client().gui;
+			if (payload.refresh()) {
+				if (gui.screen() instanceof NoteScreen open && payload.id().equals(open.noteId())) {
+					open.updateBody(payload.body());
+				}
+				return;
+			}
+			gui.setScreen(new NoteScreen(payload.id(), Component.literal(payload.title()), payload.body()));
+		});
 
 		// 事件回调：玩家进入世界（或连上服务器）时执行
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->

@@ -4,6 +4,8 @@ plugins {
 
 repositories {
 	mavenCentral()
+	// Mod Menu（模组列表 + 设置按钮）
+	maven { url = "https://maven.terraformersmc.com/releases/" }
 }
 
 loom {
@@ -28,6 +30,10 @@ dependencies {
 		implementation "org.commonmark:${lib}:${project.commonmark_version}"
 		include "org.commonmark:${lib}:${project.commonmark_version}"
 	}
+
+	// Mod Menu 是可选的：编译时用它的接口，开发版游戏里也装上方便测试，但不打包进模组
+	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
+	runtimeOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 
 	// 单元测试（只测 core/ 里不依赖游戏的代码）
 	testImplementation platform("org.junit:junit-bom:5.12.2")
