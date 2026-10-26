@@ -17,7 +17,9 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -28,15 +30,20 @@ import java.util.zip.ZipOutputStream;
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class VaultBackup {
-	private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.ROOT);
+	// 新文件名用 UTC：不受时区、夏令时影响，只会一直往前走（本地时间会往回拨，按名字排序就会把最新的当成最旧的删掉）
+	private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss'Z'", Locale.ROOT);
 	private static final Pattern BACKUP_NAME = Pattern.compile(
-			"[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(?:_(?:[2-9]|[1-9][0-9]+))?\\.zip");
+			"([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}-[0-9]{2}-[0-9]{2})Z(?:_([2-9]|[1-9][0-9]+))?\\.zip");
+	private static final DateTimeFormatter PARSE = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.ROOT);
+
+	/** 一个已有备份和它的真实时刻（同一秒的再按序号排）。 */
+	private record Existing(Path file, java.time.Instant time, int suffix) {}
 
 	private VaultBackup() {}
 
 	/**
 	 * 备份 vaultRoot 整个文件夹到 backupDir/&lt;时间&gt;.zip。要求：
-	 * - 文件名格式 "yyyy-MM-dd_HH-mm-ss.zip"，时间取自 clock（用 clock 的时区）；同一秒内已存在同名文件时加 "_2"、"_3"…
+	 * - 文件名格式 "yyyy-MM-dd'T'HH-mm-ss'Z'.zip"，时间取自 clock、一律用 UTC；同一秒内已存在同名文件时加 "_2"、"_3"…
 	 * - zip 里的路径相对 vaultRoot，用 "/" 分隔，保留子文件夹；空文件夹不用保留
 	 * - 包括隐藏文件夹（.palace/ 里的位置记录也要备份），但跳过名字以 ".palace-" 开头、".tmp" 结尾的临时文件
 	 * - 原子写入：先写 backupDir 里的临时文件，写完再 move 成正式文件名；中途失败不能留下正式文件名的半成品，也不留临时文件
@@ -44,7 +51,7 @@ public final class VaultBackup {
 	 * - 如果笔记库里所有文件的最后修改时间都不晚于最新一个已有备份的修改时间（即"自上次备份以来没改过"），
 	 *   则不备份，返回 empty
 	 * - 笔记库为空（没有任何文件）时不备份，返回 empty
-	 * - 备份完成后清理：backupDir 里符合上面文件名格式的 .zip 只保留最新的 keep 个（按文件名排序，旧的删掉）；
+	 * - 备份完成后清理：backupDir 里符合上面文件名格式的 .zip 只保留最新的 keep 个（按文件名表示的时刻排序，旧的删掉）；
 	 *   不符合格式的文件一律不动
 	 * - 单个文件读取失败：跳过它继续（不要让一个被占用的文件毁掉整个备份）
 	 * @return 新建的备份文件；没有备份时为 empty
@@ -80,7 +87,7 @@ public final class VaultBackup {
 		if (files.isEmpty() || previous != null && modified.stream().allMatch(time -> time.compareTo(previous) <= 0)) {
 			return Optional.empty();
 		}
-		String timestamp = TIMESTAMP.format(clock.instant().atZone(clock.getZone()));
+		String timestamp = TIMESTAMP.format(clock.instant().atZone(java.time.ZoneOffset.UTC));
 		Path target = backupDir.resolve(timestamp + ".zip");
 		for (int suffix = 2; Files.exists(target, LinkOption.NOFOLLOW_LINKS); suffix++) {
 			target = backupDir.resolve(timestamp + "_" + suffix + ".zip");
@@ -153,11 +160,30 @@ public final class VaultBackup {
 		}
 	}
 
+	/** 已有备份，按文件名表示的时刻从旧到新排（同一秒的按序号）。 */
 	private static List<Path> listBackups(Path directory) throws IOException {
 		try (var files = Files.list(directory)) {
 			return files.filter(file -> Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
-					.filter(file -> BACKUP_NAME.matcher(file.getFileName().toString()).matches())
-					.sorted(Comparator.comparing(file -> file.getFileName().toString())).toList();
+					.map(VaultBackup::parse)
+					.filter(Objects::nonNull)
+					.sorted(Comparator.comparing(Existing::time).thenComparingInt(Existing::suffix))
+					.map(Existing::file)
+					.toList();
 		}
+	}
+
+	/** 认出备份文件名并换算成时刻；不是备份文件返回 null。 */
+	private static Existing parse(Path file) {
+		Matcher m = BACKUP_NAME.matcher(file.getFileName().toString());
+		if (!m.matches()) {
+			return null;
+		}
+		try {
+			var time = java.time.LocalDateTime.parse(m.group(1) + "_" + m.group(2), PARSE).toInstant(java.time.ZoneOffset.UTC);
+			return new Existing(file, time, m.group(3) == null ? 1 : Integer.parseInt(m.group(3)));
+		} catch (java.time.DateTimeException | NumberFormatException e) {
+			// 名字长得像但日期不合法（比如 13 月）：不当成备份，也就不会被删
+		}
+		return null;
 	}
 }

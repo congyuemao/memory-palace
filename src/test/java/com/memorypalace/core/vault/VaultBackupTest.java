@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,10 +71,10 @@ class VaultBackupTest {
 
 		Optional<Path> zip = VaultBackup.backup(vault(), backups(), 10, at(T0));
 		assertTrue(zip.isPresent());
-		assertEquals("2026-10-27_03-04-05.zip", zip.get().getFileName().toString());
+		assertEquals("2026-10-27T03-04-05Z.zip", zip.get().getFileName().toString());
 		assertEquals(List.of(".palace/locations.tsv", "欢迎.md", "线代/特征值.md"), zipEntries(zip.get()));
 		// 没有留下临时文件
-		assertEquals(List.of("2026-10-27_03-04-05.zip"), backupNames());
+		assertEquals(List.of("2026-10-27T03-04-05Z.zip"), backupNames());
 	}
 
 	@Test
@@ -96,7 +97,7 @@ class VaultBackupTest {
 		VaultBackup.backup(vault(), backups(), 10, at(T0));
 		write("a.md", "A2", Instant.now().plusSeconds(3600));
 		Optional<Path> second = VaultBackup.backup(vault(), backups(), 10, at(T0));
-		assertEquals("2026-10-27_03-04-05_2.zip", second.orElseThrow().getFileName().toString());
+		assertEquals("2026-10-27T03-04-05Z_2.zip", second.orElseThrow().getFileName().toString());
 	}
 
 	@Test
@@ -109,9 +110,26 @@ class VaultBackupTest {
 			assertTrue(VaultBackup.backup(vault(), backups(), 3, at(T0.plusSeconds(i))).isPresent());
 		}
 		assertEquals(List.of(
-				"2026-10-27_03-04-07.zip",
-				"2026-10-27_03-04-08.zip",
-				"2026-10-27_03-04-09.zip",
+				"2026-10-27T03-04-07Z.zip",
+				"2026-10-27T03-04-08Z.zip",
+				"2026-10-27T03-04-09Z.zip",
 				"说明.txt"), backupNames());
+	}
+
+	@Test
+	void timezoneChangeNeverDeletesTheNewestBackup() throws IOException {
+		// 在墨尔本（UTC+11）做了两次备份，然后飞到中国（UTC+8），本地时间往回拨了 3 小时。
+		// 以前用本地时间命名，新备份的名字排在前面，会被当成最旧的删掉。
+		ZoneId melbourne = ZoneId.of("Australia/Melbourne");
+		ZoneId shanghai = ZoneId.of("Asia/Shanghai");
+		write("a.md", "1", Instant.now().plusSeconds(3600));
+		VaultBackup.backup(vault(), backups(), 2, Clock.fixed(T0, melbourne));
+		write("a.md", "2", Instant.now().plusSeconds(7200));
+		VaultBackup.backup(vault(), backups(), 2, Clock.fixed(T0.plusSeconds(60), melbourne));
+		write("a.md", "3", Instant.now().plusSeconds(10800));
+		Path newest = VaultBackup.backup(vault(), backups(), 2, Clock.fixed(T0.plusSeconds(120), shanghai)).orElseThrow();
+
+		assertTrue(Files.exists(newest), "最新的备份必须留下");
+		assertEquals(List.of("2026-10-27T03-05-05Z.zip", "2026-10-27T03-06-05Z.zip"), backupNames());
 	}
 }

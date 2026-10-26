@@ -25,7 +25,9 @@ import net.minecraft.world.level.block.entity.LecternBlockEntity;
 import net.minecraft.world.phys.Vec3;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -44,11 +46,16 @@ public final class ToolPayloads {
 
 	// ---- 快速收集 ----
 
-	/** 客户端 → 服务端：记进今天的收件箱。 */
-	public record Capture(String text) implements CustomPacketPayload {
+	/**
+	 * 客户端 → 服务端：记进今天的收件箱。localTime 是玩家电脑上的本地时间（ISO 格式、带时区偏移），
+	 * "今天"按玩家所在地算，而不是服务器所在地。
+	 */
+	public record Capture(String text, String localTime) implements CustomPacketPayload {
 		public static final Type<Capture> TYPE = new Type<>(MemoryPalace.id("capture"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, Capture> CODEC = StreamCodec.composite(
-				ByteBufCodecs.stringUtf8(MAX_CAPTURE), Capture::text, Capture::new);
+				ByteBufCodecs.stringUtf8(MAX_CAPTURE), Capture::text,
+				ByteBufCodecs.stringUtf8(64), Capture::localTime,
+				Capture::new);
 
 		@Override
 		public Type<? extends CustomPacketPayload> type() {
@@ -157,20 +164,20 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(LookInfo.TYPE, LookInfo.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
-		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> capture(ctx.player(), p.text()));
+		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> capture(ctx.player(), p.text(), p.localTime()));
 		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(OpenById.TYPE, (p, ctx) -> PalaceInteractions.openNote(ctx.player(), p.id()));
 	}
 
-	private static void capture(ServerPlayer player, String text) {
+	private static void capture(ServerPlayer player, String text, String localTime) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
 			return;
 		}
 		try {
-			NoteSummary inbox = Inbox.append(vault, LocalDateTime.now(), text);
+			NoteSummary inbox = Inbox.append(vault, playerTime(localTime), text);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.captured", inbox.relativePath()));
 		} catch (IllegalArgumentException e) {
 			// 空内容：什么都不做
@@ -179,6 +186,23 @@ public final class ToolPayloads {
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("写入收件箱失败", e);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.capture_failed"));
+		}
+	}
+
+	/**
+	 * 玩家那边的本地时间。时刻和服务器差得太多（超过 1 小时，说明玩家电脑时钟不准或者数据是乱填的）、
+	 * 或者格式不对，就退回服务器自己的时间。时区偏移照用玩家的。
+	 */
+	private static OffsetDateTime playerTime(String localTime) {
+		OffsetDateTime server = OffsetDateTime.now();
+		try {
+			OffsetDateTime client = OffsetDateTime.parse(localTime);
+			if (Math.abs(Duration.between(server.toInstant(), client.toInstant()).toMinutes()) <= 60) {
+				return client;
+			}
+			return server.toInstant().atOffset(client.getOffset());
+		} catch (DateTimeParseException e) {
+			return server;
 		}
 	}
 

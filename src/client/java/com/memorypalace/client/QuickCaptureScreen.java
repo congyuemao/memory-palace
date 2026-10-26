@@ -10,6 +10,7 @@ import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
 /**
  * 快速收集：一个小输入框，写一句话、回车，就记进今天的收件箱，然后马上回到游戏。
@@ -39,7 +40,8 @@ public class QuickCaptureScreen extends Screen {
 	public boolean keyPressed(KeyEvent event) {
 		if (event.isConfirmation()) {
 			if (!text.isBlank()) {
-				ClientPlayNetworking.send(new ToolPayloads.Capture(text));
+				// 带上本机的本地时间和时区："今天"按玩家所在地算（出国、跨日期变更线都对）
+				ClientPlayNetworking.send(new ToolPayloads.Capture(text, OffsetDateTime.now().toString()));
 			}
 			onClose();
 			return true;
