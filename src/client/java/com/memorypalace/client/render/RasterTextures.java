@@ -1,0 +1,78 @@
+package com.memorypalace.client.render;
+
+import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.render.Raster;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.resources.Identifier;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.function.Supplier;
+
+/**
+ * 把 Raster（公式、图片）变成游戏贴图并缓存。最多同时保留 MAX 张，最久没用的会被释放。
+ * 只能在渲染线程（客户端主线程）调用。
+ */
+public final class RasterTextures {
+	private static final int MAX = 256;
+
+	/** 一张贴图：rasterW/H 是贴图本身的像素尺寸，depth 是基线以下的像素数（图片为 0）。 */
+	public record Tex(Identifier id, int rasterW, int rasterH, int depth) {}
+
+	// accessOrder = true：每次 get 都会把它挪到最后，所以第一个就是最久没用的
+	private static final Map<String, Tex> CACHE = new LinkedHashMap<>(64, 0.75F, true);
+	private static int counter;
+
+	private RasterTextures() {}
+
+	public static Tex get(String key) {
+		return CACHE.get(key);
+	}
+
+	/** 有缓存就直接返回，没有就调用 make 生成；make 返回 null 表示生成失败（失败不缓存）。 */
+	public static Tex getOrCreate(String key, int depth, Supplier<Raster> make) {
+		Tex tex = CACHE.get(key);
+		if (tex != null) {
+			return tex;
+		}
+		Raster raster = make.get();
+		if (raster == null) {
+			return null;
+		}
+		return put(key, raster, depth);
+	}
+
+	public static Tex put(String key, Raster raster, int depth) {
+		NativeImage image = new NativeImage(raster.width(), raster.height(), false);
+		for (int y = 0; y < raster.height(); y++) {
+			for (int x = 0; x < raster.width(); x++) {
+				image.setPixel(x, y, raster.get(x, y));
+			}
+		}
+		Identifier id = MemoryPalace.id("dynamic/" + (counter++));
+		Minecraft.getInstance().getTextureManager().register(id, new DynamicTexture(id::toString, image));
+		Tex tex = new Tex(id, raster.width(), raster.height(), depth);
+		Tex old = CACHE.put(key, tex);
+		if (old != null) {
+			release(old);
+		}
+		while (CACHE.size() > MAX) {
+			var eldest = CACHE.entrySet().iterator().next();
+			CACHE.remove(eldest.getKey());
+			release(eldest.getValue());
+		}
+		return tex;
+	}
+
+	/** 界面缩放变了等情况：全部清掉，下次重新生成。 */
+	public static void clear() {
+		CACHE.values().forEach(RasterTextures::release);
+		CACHE.clear();
+	}
+
+	private static void release(Tex tex) {
+		Minecraft.getInstance().getTextureManager().release(tex.id());
+	}
+}

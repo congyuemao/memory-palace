@@ -3,7 +3,10 @@ package com.memorypalace.client;
 import com.memorypalace.client.book.BookLayout;
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookSettings;
+import com.memorypalace.client.render.NoteImageStore;
+import com.memorypalace.client.render.RasterTextures;
 import com.memorypalace.core.markdown.MarkdownParser;
+import com.memorypalace.core.render.MathRenderer;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.PalaceServer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -12,6 +15,7 @@ import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.BookViewScreen;
 import net.minecraft.client.gui.screens.inventory.PageButton;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 
 import java.nio.file.Path;
@@ -76,6 +80,8 @@ public class NoteScreen extends Screen {
 	/** 文件在外部被改了：换上新内容，尽量停在原来那一页。 */
 	public void updateBody(String newBody) {
 		this.body = newBody;
+		// 外部可能换了图片：重新请求这篇笔记的图
+		NoteImageStore.forget(noteId);
 		relayout();
 	}
 
@@ -115,6 +121,8 @@ public class NoteScreen extends Screen {
 
 	@Override
 	protected void init() {
+		// 图片到了就重新排版（排版器会拿到新贴图）
+		NoteImageStore.setOnArrive(this::relayout);
 		computeSize();
 		relayout();
 		int buttonY = top + pageH - 25;
@@ -138,9 +146,58 @@ public class NoteScreen extends Screen {
 		}
 		// 字体放大 fontScale 倍 = 排版时把页面当成缩小 fontScale 倍来排
 		pages = BookLayout.paginate(this.font, MarkdownParser.parse(body),
-				(int) (textWidth() / fontScale), (int) (textHeight() / fontScale));
+				(int) (textWidth() / fontScale), (int) (textHeight() / fontScale), new ScreenBoxes());
 		spread = Math.clamp(spread, 0, maxSpread());
 		updateButtons();
+	}
+
+	/** 1 个排版单位 = 多少个屏幕实际像素。公式按这个分辨率生成，画出来才清楚。 */
+	private float pxPerUnit() {
+		return (float) (this.minecraft.getWindow().getGuiScale() * fontScale);
+	}
+
+	/** 给排版器提供公式和图片的贴图。 */
+	private final class ScreenBoxes implements BookLayout.Boxes {
+		// 公式字号（排版单位）：大写字母高度和原版字体差不多
+		private static final float MATH_SIZE = 10.0F;
+
+		@Override
+		public BookLayout.Box math(String tex, boolean display) {
+			float px = pxPerUnit();
+			String key = "math|" + display + "|" + px + "|" + tex;
+			RasterTextures.Tex t = RasterTextures.get(key);
+			if (t == null) {
+				var result = MathRenderer.render(tex, display, MATH_SIZE * px, BookLayout.MATH);
+				if (!result.ok()) {
+					return null;
+				}
+				t = RasterTextures.put(key, result.raster(), result.depth());
+			}
+			return new BookLayout.Box(t.id(), t.rasterW(), t.rasterH(), t.depth(), px);
+		}
+
+		@Override
+		public BookLayout.Box image(String src) {
+			if (noteId == null || NoteImageStore.state(noteId, src) != NoteImageStore.State.READY) {
+				return null;
+			}
+			RasterTextures.Tex t = NoteImageStore.texture(noteId, src);
+			// 图片按实际像素大小显示（太大会被排版器缩到页宽）
+			return t == null ? null : new BookLayout.Box(t.id(), t.rasterW(), t.rasterH(), 0, pxPerUnit());
+		}
+
+		@Override
+		public String imagePlaceholder(String src, String alt) {
+			if (noteId != null && NoteImageStore.state(noteId, src) == NoteImageStore.State.LOADING) {
+				return Component.translatable("screen.memorypalace.image_loading").getString();
+			}
+			return Component.translatable("screen.memorypalace.image_missing", alt.isEmpty() ? src : alt).getString();
+		}
+	}
+
+	@Override
+	public void removed() {
+		NoteImageStore.setOnArrive(null);
 	}
 
 	private int maxSpread() {
@@ -256,12 +313,27 @@ public class NoteScreen extends Screen {
 				case RULE -> graphics.fill(0, y + 3, width, y + 4, 0x66704A2A);
 				default -> {}
 			}
-			if (line.kind() != BookLayout.Kind.GAP && line.kind() != BookLayout.Kind.RULE) {
-				// 原版书里的字没有阴影
-				graphics.text(this.font, line.text(), line.x(), y, BookLayout.TEXT, false);
+			for (BookLayout.Seg seg : line.segs()) {
+				switch (seg) {
+					// 原版书里的字没有阴影
+					case BookLayout.TextSeg t -> graphics.text(this.font, t.text(), t.x(), y + t.y(), BookLayout.TEXT, false);
+					case BookLayout.BoxSeg b -> drawBox(graphics, b, y);
+				}
 			}
 			y += line.height();
 		}
+		graphics.pose().popMatrix();
+	}
+
+	/** 画公式/图片：缩到"1 贴图像素 = 1 屏幕像素"再画，保证清晰。 */
+	private void drawBox(GuiGraphicsExtractor graphics, BookLayout.BoxSeg seg, int lineY) {
+		BookLayout.Box box = seg.box();
+		graphics.pose().pushMatrix();
+		graphics.pose().translate(seg.x(), lineY + seg.y());
+		float s = seg.scale() / box.pxPerUnit();
+		graphics.pose().scale(s, s);
+		graphics.blit(RenderPipelines.GUI_TEXTURED, box.texture(), 0, 0, 0.0F, 0.0F,
+				box.rasterW(), box.rasterH(), box.rasterW(), box.rasterH());
 		graphics.pose().popMatrix();
 	}
 

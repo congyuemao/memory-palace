@@ -1,6 +1,8 @@
 package com.memorypalace.client;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.client.render.NoteImageStore;
+import com.memorypalace.core.render.MathRenderer;
 import com.memorypalace.mc.OpenNotePayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -40,6 +42,10 @@ public class MemoryPalaceClient implements ClientModInitializer {
 				client.gui.setScreen(new SettingsScreen(client.gui.screen()));
 			}
 		});
+
+		NoteImageStore.register();
+		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
+		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));
 
 		// 服务端说"打开这篇笔记" → 打开笔记窗口；"刷新" → 只在还开着这篇时更新内容
 		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) -> {

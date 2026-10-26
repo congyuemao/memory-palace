@@ -26,6 +26,8 @@
 	"key.category.memorypalace.main": "记忆宫殿",
 	"screen.memorypalace.note": "记忆宫殿 · 笔记",
 	"screen.memorypalace.open_external": "用外部编辑器打开",
+	"screen.memorypalace.image_loading": "（图片加载中…）",
+	"screen.memorypalace.image_missing": "[找不到图片：%s]",
 	"key.memorypalace.settings": "打开记忆宫殿设置",
 	"settings.memorypalace.title": "记忆宫殿设置",
 	"settings.memorypalace.hint": "书页变大时字号不变，一页能放更多行",

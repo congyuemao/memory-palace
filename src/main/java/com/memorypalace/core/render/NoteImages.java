@@ -1,7 +1,26 @@
 package com.memorypalace.core.render;
 
+import java.awt.AlphaComposite;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
+
+import javax.imageio.ImageIO;
 
 /**
  * 笔记里引用的本地图片：找文件、解码、缩小、编码成 PNG（用来通过网络发给客户端）。
@@ -23,7 +42,75 @@ public final class NoteImages {
 	 * @param noteRelativePath 笔记相对笔记库的路径，"/" 分隔，例如 "线代/特征值.md"
 	 */
 	public static Optional<Path> resolve(Path vaultRoot, String noteRelativePath, String src) {
-		throw new UnsupportedOperationException("TODO");
+		try {
+			if (src == null || src.isBlank()) {
+				return Optional.empty();
+			}
+			try {
+				// 图片路径中的加号是文件名的一部分，不是表单编码的空格。
+				src = URLDecoder.decode(src.replace("+", "%2B"), StandardCharsets.UTF_8);
+			} catch (IllegalArgumentException ignored) {
+				// 不完整的百分号编码按原始文件名查找。
+			}
+			src = src.replace('\\', '/');
+			if (src.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*") || src.startsWith("/")) {
+				return Optional.empty();
+			}
+			Path relative = Path.of(src);
+			if (relative.isAbsolute()) {
+				return Optional.empty();
+			}
+			String filename = relative.getFileName().toString();
+			int dot = filename.lastIndexOf('.');
+			String extension = filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+			if (dot < 0 || !Set.of("png", "jpg", "jpeg", "gif", "bmp").contains(extension)) {
+				return Optional.empty();
+			}
+			Path root = vaultRoot.toAbsolutePath().normalize();
+			Path realRoot = root.toRealPath();
+			Path note = root.resolve(noteRelativePath).normalize();
+			if (!note.startsWith(root) || note.equals(root)) {
+				return Optional.empty();
+			}
+			Path besideNote = note.getParent().resolve(relative).normalize();
+			if (!besideNote.startsWith(root)) {
+				return Optional.empty();
+			}
+			if (isImageFile(besideNote, root, realRoot)) {
+				return Optional.of(besideNote);
+			}
+			Path atRoot = root.resolve(relative).normalize();
+			if (isImageFile(atRoot, root, realRoot)) {
+				return Optional.of(atRoot);
+			}
+			if (src.contains("/")) {
+				return Optional.empty();
+			}
+			var matches = new ArrayList<Path>();
+			Files.walkFileTree(root, new SimpleFileVisitor<>() {
+				@Override
+				public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+					return !dir.equals(root) && dir.getFileName().toString().startsWith(".")
+							? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+				}
+
+				@Override
+				public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+					if (file.getFileName().toString().equals(filename) && isImageFile(file, root, realRoot)) {
+						matches.add(file);
+					}
+					return FileVisitResult.CONTINUE;
+				}
+			});
+			return matches.stream().min(Comparator.comparing(
+					path -> root.relativize(path).toString().replace('\\', '/')));
+		} catch (Exception ignored) {
+			return Optional.empty();
+		}
+	}
+
+	private static boolean isImageFile(Path file, Path root, Path realRoot) throws IOException {
+		return file.startsWith(root) && Files.isRegularFile(file) && file.toRealPath().startsWith(realRoot);
 	}
 
 	/**
@@ -31,16 +118,65 @@ public final class NoteImages {
 	 * 透明通道保留；没有透明通道的图 alpha = 0xFF。gif 只取第一帧。解码失败 → empty，不抛异常。
 	 */
 	public static Optional<Raster> load(Path file, int maxDim) {
-		throw new UnsupportedOperationException("TODO");
+		try {
+			if (maxDim <= 0) {
+				return Optional.empty();
+			}
+			BufferedImage image = ImageIO.read(file.toFile());
+			if (image == null) {
+				return Optional.empty();
+			}
+			int width = image.getWidth();
+			int height = image.getHeight();
+			if (width > maxDim || height > maxDim) {
+				double scale = (double) maxDim / Math.max(width, height);
+				width = Math.max(1, (int) Math.round(width * scale));
+				height = Math.max(1, (int) Math.round(height * scale));
+				var scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+				var graphics = scaled.createGraphics();
+				try {
+					graphics.setComposite(AlphaComposite.Src);
+					graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+							RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+					graphics.drawImage(image, 0, 0, width, height, null);
+				} finally {
+					graphics.dispose();
+				}
+				image = scaled;
+			}
+			return Optional.of(toRaster(image));
+		} catch (Exception ignored) {
+			return Optional.empty();
+		}
 	}
 
 	/** 位图 → PNG 字节。 */
 	public static byte[] toPng(Raster raster) {
-		throw new UnsupportedOperationException("TODO");
+		var image = new BufferedImage(raster.width(), raster.height(), BufferedImage.TYPE_INT_ARGB);
+		image.setRGB(0, 0, raster.width(), raster.height(), raster.argb(), 0, raster.width());
+		try (var output = new ByteArrayOutputStream()) {
+			if (!ImageIO.write(image, "png", output)) {
+				throw new IOException("PNG 编码器不可用");
+			}
+			return output.toByteArray();
+		} catch (IOException e) {
+			throw new UncheckedIOException("PNG 编码失败", e);
+		}
 	}
 
 	/** PNG（或 jpg 等 ImageIO 能读的）字节 → 位图；失败 → empty，不抛异常。 */
 	public static Optional<Raster> fromBytes(byte[] data) {
-		throw new UnsupportedOperationException("TODO");
+		try (var input = new ByteArrayInputStream(data)) {
+			BufferedImage image = ImageIO.read(input);
+			return image == null ? Optional.empty() : Optional.of(toRaster(image));
+		} catch (Exception ignored) {
+			return Optional.empty();
+		}
+	}
+
+	private static Raster toRaster(BufferedImage image) {
+		int width = image.getWidth();
+		int height = image.getHeight();
+		return new Raster(width, height, image.getRGB(0, 0, width, height, null, 0, width));
 	}
 }

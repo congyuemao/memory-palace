@@ -26,6 +26,8 @@
 	"key.category.memorypalace.main": "Memory Palace",
 	"screen.memorypalace.note": "Memory Palace · Note",
 	"screen.memorypalace.open_external": "Open in external editor",
+	"screen.memorypalace.image_loading": "(loading image…)",
+	"screen.memorypalace.image_missing": "[image not found: %s]",
 	"key.memorypalace.settings": "Open Memory Palace settings",
 	"settings.memorypalace.title": "Memory Palace Settings",
 	"settings.memorypalace.hint": "Bigger pages keep the font size and fit more lines",

@@ -81,6 +81,10 @@ public final class MarkdownParser {
 					if (item != null) {
 						item.first = false;
 					}
+				} else if (addImages(node, raw)) {
+					if (item != null) {
+						item.first = false;
+					}
 				} else {
 					addParagraph(spans(node), quoteDepth, item);
 				}
@@ -132,6 +136,54 @@ public final class MarkdownParser {
 			for (Node child = node.getFirstChild(); child != null; child = child.getNext()) {
 				read(child, listDepth, quoteDepth, item);
 			}
+		}
+
+		private boolean addImages(Node paragraph, String raw) {
+			var images = new ArrayList<MdBlock.Image>();
+			boolean onlyImages = true;
+			for (Node child = paragraph.getFirstChild(); child != null; child = child.getNext()) {
+				if (child instanceof Image image) {
+					var alt = new StringBuilder();
+					for (MdSpan span : spans(image)) {
+						alt.append(span.text());
+					}
+					images.add(new MdBlock.Image(image.getDestination(), alt.toString()));
+				} else if (!(child instanceof Text text && text.getLiteral().isBlank())
+						&& !(child instanceof SoftLineBreak) && !(child instanceof HardLineBreak)) {
+					onlyImages = false;
+					break;
+				}
+			}
+			if (onlyImages && !images.isEmpty()) {
+				blocks.addAll(images);
+				return true;
+			}
+			images.clear();
+			// Obsidian 图片保留原文路径，不让 Markdown 消耗其中的标点。
+			for (String line : raw.split("\\R")) {
+				line = line.strip();
+				if (line.isEmpty()) {
+					continue;
+				}
+				if (!line.startsWith("![[") || !line.endsWith("]]")) {
+					return false;
+				}
+				String target = line.substring(3, line.length() - 2);
+				if (target.contains("]]")) {
+					return false;
+				}
+				int separator = target.indexOf('|');
+				String src = separator < 0 ? target : target.substring(0, separator);
+				if (src.isBlank()) {
+					return false;
+				}
+				images.add(new MdBlock.Image(src, ""));
+			}
+			if (images.isEmpty()) {
+				return false;
+			}
+			blocks.addAll(images);
+			return true;
 		}
 
 		private void addParagraph(List<MdSpan> spans, int quoteDepth, ItemState item) {

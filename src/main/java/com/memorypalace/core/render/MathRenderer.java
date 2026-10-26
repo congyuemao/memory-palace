@@ -1,10 +1,20 @@
 package com.memorypalace.core.render;
 
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+
+import org.scilab.forge.jlatexmath.ParseException;
+import org.scilab.forge.jlatexmath.TeXConstants;
+import org.scilab.forge.jlatexmath.TeXFormula;
+import org.scilab.forge.jlatexmath.TeXParser;
+
 /**
  * LaTeX 公式 → 位图，底层用 JLaTeXMath（org.scilab.forge.jlatexmath）。
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class MathRenderer {
+	private static final Object RENDER_LOCK = new Object();
+
 	private MathRenderer() {}
 
 	/**
@@ -29,6 +39,56 @@ public final class MathRenderer {
 	 * - 线程安全（可能同时从多个线程调用）
 	 */
 	public static Result render(String tex, boolean display, float pixelSize, int color) {
-		throw new UnsupportedOperationException("TODO");
+		if (tex == null || tex.isBlank()) {
+			return new Result(null, 0, "公式不能为空");
+		}
+		if (!Float.isFinite(pixelSize) || pixelSize <= 0) {
+			return new Result(null, 0, "字号必须是有限正数");
+		}
+		// JLaTeXMath 的字体缓存和宏表是共享的，解析和绘制都放在锁内。
+		synchronized (RENDER_LOCK) {
+			try {
+				var formula = new TeXFormula();
+				new StrictParser(tex, formula).parse();
+				var icon = formula.createTeXIcon(
+						display ? TeXConstants.STYLE_DISPLAY : TeXConstants.STYLE_TEXT, pixelSize);
+				icon.setForeground(new Color(color, true));
+				int width = Math.addExact(icon.getIconWidth(), 2);
+				int height = Math.addExact(icon.getIconHeight(), 2);
+				var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+				var graphics = image.createGraphics();
+				try {
+					// 1.0.7 会检查 null；TeXIcon 本身不是 Swing 组件。
+					icon.paintIcon(null, graphics, 1, 1);
+				} finally {
+					graphics.dispose();
+				}
+				return new Result(new Raster(width, height,
+						image.getRGB(0, 0, width, height, null, 0, width)),
+						Math.clamp((long) icon.getIconDepth() + 1, 0, height), null);
+			} catch (RuntimeException e) {
+				String message = e.getMessage();
+				return new Result(null, 0, message == null || message.isBlank()
+						? e.getClass().getSimpleName() : message);
+			}
+		}
+	}
+
+	private static final class StrictParser extends TeXParser {
+		private StrictParser(String tex, TeXFormula formula) {
+			super(tex, formula);
+		}
+
+		@Override
+		public String[] getOptsArgs(int count, int optionPosition) {
+			String[] args = super.getOptsArgs(count, optionPosition);
+			// 1.0.7 将缺失参数返回为 null，显式的空参数 {} 则是空串。
+			for (int i = 1; i <= count; i++) {
+				if (args[i] == null) {
+					throw new ParseException("缺少必需参数 " + i);
+				}
+			}
+			return args;
+		}
 	}
 }
