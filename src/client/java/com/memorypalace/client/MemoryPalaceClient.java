@@ -3,6 +3,7 @@ package com.memorypalace.client;
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.core.render.MathRenderer;
+import com.memorypalace.mc.EditPayloads;
 import com.memorypalace.mc.OpenNotePayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -44,6 +45,15 @@ public class MemoryPalaceClient implements ClientModInitializer {
 		});
 
 		NoteImageStore.register();
+
+		// 编辑器：保存结果转给正开着的编辑器；/palace new 之后直接打开编辑器
+		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.SaveResult.TYPE, (payload, context) -> {
+			if (context.client().gui.screen() instanceof EditorScreen editor && payload.noteId().equals(editor.noteId())) {
+				editor.onSaveResult(payload);
+			}
+		});
+		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) ->
+				context.client().gui.setScreen(new EditorScreen(payload.noteId(), Component.literal(payload.title()), payload.body())));
 		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
 		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));
 

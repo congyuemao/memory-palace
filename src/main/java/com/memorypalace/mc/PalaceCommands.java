@@ -8,6 +8,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -54,10 +55,41 @@ public final class PalaceCommands {
 								.then(Commands.argument("folder", StringArgumentType.greedyString())
 										.executes(ctx -> list(ctx, StringArgumentType.getString(ctx, "folder")))))
 						.then(Commands.literal("rescan").executes(PalaceCommands::rescan))
+						.then(Commands.literal("new")
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(PalaceCommands::create)))
 						.then(Commands.literal("where")
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
 										.executes(PalaceCommands::where)))));
+	}
+
+	/** /palace new &lt;文件夹/文件名&gt;：新建笔记，给一本笔记书，并直接打开游戏内编辑器。 */
+	private static int create(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		String path = StringArgumentType.getString(ctx, "path").strip();
+		NoteSummary note;
+		String body;
+		try {
+			note = vault.createNote(path, "");
+			body = vault.readBody(note.id()).orElse("");
+		} catch (IllegalArgumentException e) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.new_failed", e.getMessage()));
+			return 0;
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.error("新建笔记失败：{}", path, e);
+			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
+			return 0;
+		}
+		player.getInventory().placeItemBackInInventory(NoteBooks.create(note), Prediction.SERVER_ONLY);
+		ServerPlayNetworking.send(player, new EditPayloads.OpenEditor(note.id(),
+				OpenNotePayload.clip(note.title(), OpenNotePayload.MAX_TITLE), body));
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.created", note.relativePath()), false);
+		return 1;
 	}
 
 	/**

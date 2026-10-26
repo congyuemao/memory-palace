@@ -2,17 +2,22 @@ package com.memorypalace.core.vault;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -228,7 +233,12 @@ public final class Vault {
 	 * 比较前把 "\r\n" 统一成 "\n"（Windows 换行不算修改）。
 	 */
 	public static String hash(String body) {
-		throw new UnsupportedOperationException("TODO");
+		try {
+			byte[] bytes = body.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8);
+			return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+		} catch (NoSuchAlgorithmException e) {
+			throw new IllegalStateException("运行环境不支持 SHA-256", e);
+		}
 	}
 
 	/**
@@ -241,7 +251,44 @@ public final class Vault {
 	 * - 找不到笔记 / 文件已被删 → MISSING（会先像 readBody 那样重新扫描一次再判断）
 	 */
 	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash) throws IOException {
-		throw new UnsupportedOperationException("TODO");
+		if (id == null) {
+			return WriteResult.MISSING;
+		}
+		for (int attempt = 0; attempt < 2; attempt++) {
+			NoteSummary note = index.get(id);
+			if (note != null) {
+				Path file = root.resolve(note.relativePath());
+				String text = null;
+				try {
+					text = Files.readString(file, StandardCharsets.UTF_8);
+				} catch (NoSuchFileException e) {
+					// 旧路径消失后重新扫描一次，以 ID 追踪改名后的文件。
+				}
+				if (text != null) {
+					FrontMatter.Parsed parsed = FrontMatter.parse(text);
+					if (id.equals(parsed.id())) {
+						if (expectedHash != null && !hash(parsed.body()).equals(expectedHash)) {
+							return WriteResult.CONFLICT;
+						}
+						String newline = text.contains("\r\n") ? "\r\n" : "\n";
+						String body = newBody.replace("\r\n", "\n").replace("\n", newline);
+						// 正文是原文的后缀，直接截取可保留字段格式、注释和空白。
+						String frontMatter = text.substring(text.startsWith("\uFEFF") ? 1 : 0,
+								text.length() - parsed.body().length());
+						if (!body.isEmpty() && !frontMatter.endsWith("\n")) {
+							frontMatter += newline;
+						}
+						writeAtomically(file, frontMatter + body);
+						scan();
+						return WriteResult.OK;
+					}
+				}
+			}
+			if (attempt == 0) {
+				scan();
+			}
+		}
+		return WriteResult.MISSING;
 	}
 
 	/**
@@ -255,7 +302,70 @@ public final class Vault {
 	 * - 原子写，写完更新索引，返回新笔记的 NoteSummary
 	 */
 	public synchronized NoteSummary createNote(String relativePath, String body) throws IOException {
-		throw new UnsupportedOperationException("TODO");
+		if (relativePath == null || relativePath.isEmpty()) {
+			throw new IllegalArgumentException("笔记路径不能为空");
+		}
+		String input = relativePath.replace('\\', '/');
+		if (input.startsWith("/")) {
+			throw new IllegalArgumentException("笔记路径不能是绝对路径");
+		}
+		for (String part : input.split("/", -1)) {
+			if (part.isEmpty()) {
+				throw new IllegalArgumentException("文件名或文件夹名不能为空");
+			}
+			if (part.startsWith(".")) {
+				throw new IllegalArgumentException("文件名或文件夹名不能以点开头，也不能使用 ..");
+			}
+			if (part.chars().anyMatch(c -> c < 32 || "<>:\"|?*".indexOf(c) >= 0)) {
+				throw new IllegalArgumentException("文件名或文件夹名含有 Windows 不允许的字符");
+			}
+		}
+		if (!isMarkdown(input)) {
+			input += ".md";
+		}
+		Path file;
+		try {
+			Path path = root.getFileSystem().getPath(input);
+			if (path.isAbsolute() || path.getRoot() != null) {
+				throw new IllegalArgumentException("笔记路径不能是绝对路径");
+			}
+			file = root.resolve(path).normalize();
+		} catch (InvalidPathException e) {
+			throw new IllegalArgumentException("笔记路径不合法", e);
+		}
+		if (!file.startsWith(root) || file.equals(root)) {
+			throw new IllegalArgumentException("笔记路径不能超出笔记库");
+		}
+		Path ancestor = file.getParent();
+		while (!Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
+			ancestor = ancestor.getParent();
+		}
+		if (!ancestor.toRealPath().startsWith(root.toRealPath())) {
+			throw new IllegalArgumentException("笔记路径不能通过链接超出笔记库");
+		}
+		if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
+			throw new IllegalArgumentException("笔记已存在");
+		}
+		String name = file.getFileName().toString();
+		String newBody = body.isEmpty() ? "# " + name.substring(0, name.length() - 3) + "\n\n" : body;
+		UUID id;
+		do {
+			id = UUID.randomUUID();
+		} while (index.containsKey(id));
+		String text = "---\npalace-id: " + id + "\n---\n" + newBody;
+		Files.createDirectories(file.getParent());
+		Path temporary = Files.createTempFile(file.getParent(), ".palace-", ".tmp");
+		try {
+			Files.writeString(temporary, text, StandardCharsets.UTF_8);
+			// ATOMIC_MOVE 可能覆盖已存在的目标，新建时必须保留存在性检查。
+			Files.move(temporary, file);
+		} catch (FileAlreadyExistsException e) {
+			throw new IllegalArgumentException("笔记已存在", e);
+		} finally {
+			Files.deleteIfExists(temporary);
+		}
+		scan();
+		return find(id).orElseThrow(() -> new IOException("新笔记未能加入索引"));
 	}
 
 	private String relativePath(Path file) {

@@ -1,5 +1,6 @@
 package com.memorypalace;
 
+import com.memorypalace.mc.EditPayloads;
 import com.memorypalace.mc.ImagePayloads;
 import com.memorypalace.mc.OpenNotePayload;
 import com.memorypalace.mc.PalaceCommands;
@@ -25,6 +26,7 @@ public class MemoryPalace implements ModInitializer {
 	public void onInitialize() {
 		PayloadTypeRegistry.clientboundPlay().register(OpenNotePayload.TYPE, OpenNotePayload.CODEC);
 		ImagePayloads.register();
+		EditPayloads.register();
 		PalaceServer.register();
 		PalaceInteractions.register();
 		PalaceCommands.register();
