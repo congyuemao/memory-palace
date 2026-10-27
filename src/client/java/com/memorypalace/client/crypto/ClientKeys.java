@@ -148,6 +148,8 @@ public final class ClientKeys {
 			key = null;
 		}
 		forgetBox();
+		// 正在逐篇加密 / 解密的文件夹：排着队的取消（解密的是明文），报告未处理几篇
+		FolderBatch.onLock();
 		// 文件夹钥匙、每篇笔记的内容钥匙一起清零（草稿已经在上面用它们加密暂存过了）
 		FolderKeys.clear();
 		NoteSealers.clear();

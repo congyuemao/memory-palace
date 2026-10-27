@@ -13,16 +13,23 @@ final class RateLimiter {
 
 	private final double perSecond;
 	private final double burst;
+	private final java.util.function.LongSupplier nanoClock;
 	private final Map<UUID, Bucket> buckets = new ConcurrentHashMap<>();
 
 	RateLimiter(double perSecond, double burst) {
+		this(perSecond, burst, System::nanoTime);
+	}
+
+	/** 测试用：自己给时钟（纳秒）。 */
+	RateLimiter(double perSecond, double burst, java.util.function.LongSupplier nanoClock) {
 		this.perSecond = perSecond;
 		this.burst = burst;
+		this.nanoClock = nanoClock;
 	}
 
 	/** 还有额度就花掉一个并返回 true。 */
 	boolean tryTake(UUID player) {
-		long now = System.nanoTime();
+		long now = nanoClock.getAsLong();
 		boolean[] ok = new boolean[1];
 		buckets.compute(player, (id, b) -> {
 			double tokens = b == null ? burst : Math.min(burst, b.tokens() + (now - b.atNanos()) / 1e9 * perSecond);

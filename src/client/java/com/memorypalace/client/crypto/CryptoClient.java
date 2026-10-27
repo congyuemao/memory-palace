@@ -15,6 +15,7 @@ import com.memorypalace.mc.CryptoPayloads;
 import com.memorypalace.mc.EditPayloads;
 import com.memorypalace.mc.FolderPayloads;
 import com.memorypalace.mc.OpenNotePayload;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -70,40 +71,13 @@ public final class CryptoClient {
 
 	private static DecryptIntent decryptIntent;
 
-	// 文件夹独立密码：服务端发来"给这个文件夹设密码"，要是玩家 10 秒内亲手输入过 /palace lockfolder；
-	// 设好之后 2 分钟内，服务端逐篇发来的"用这把文件夹钥匙加密这篇"才认（钥匙 ID 记在 folderEncryptLock）
+	// 文件夹独立密码：服务端发来"给这个文件夹设密码 / 继续加密"，要是玩家 10 秒内亲手输入过 /palace lockfolder。
+	// 之后服务端逐篇发来的"用这把文件夹钥匙加密 / 解密这篇"，只在 FolderBatch 正在做这把锁的那一批时才认
 	private static boolean lockFolderRequested;
 	private static long lockFolderRequestedAt;
-	private static final long FOLDER_ENCRYPT_NANOS = 120_000_000_000L;
-	private static String folderEncryptLock;
-	private static long folderEncryptAt;
 	// /palace folderpassword、/palace unlockfolder：10 秒内亲手输入过才认服务端发来的对应请求
 	private static String folderManageRequested;
 	private static long folderManageRequestedAt;
-
-	/**
-	 * 正在解除某个文件夹的密码：玩家输过文件夹密码、确认过之后才开始。服务端逐篇发来还用着这把锁的笔记，
-	 * 客户端解密存回明文；全部存好、而且服务端说发完了，才删锁文件。有一篇没存好就不删（锁还在，笔记都还打得开）。
-	 */
-	private static final class FolderDecrypt {
-		final String folder;
-		final String lockId;
-		final String lock;
-		final long startedAt = System.nanoTime();
-		int outstanding;
-		int failed;
-		boolean serverDone;
-
-		FolderDecrypt(String folder, String lockId, String lock) {
-			this.folder = folder;
-			this.lockId = lockId;
-			this.lock = lock;
-		}
-	}
-
-	private static FolderDecrypt folderDecrypt;
-	// 解除文件夹密码最多等这么久（笔记多、网络慢也够了）
-	private static final long FOLDER_DECRYPT_NANOS = 600_000_000_000L;
 
 	// 加密文件夹时遇到的旧格式 MPAL1 笔记：要先解锁保险库才能解开再改用文件夹钥匙；保险库还锁着时先排队，解锁一次后一起处理
 	private static final java.util.List<CryptoPayloads.Action> WAITING_FOR_VAULT = new java.util.ArrayList<>();
@@ -120,6 +94,8 @@ public final class CryptoClient {
 		ClientPlayNetworking.registerGlobalReceiver(FolderPayloads.LockWriteResult.TYPE,
 				(payload, context) -> FolderKeys.onLockWriteResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) -> receive(payload));
+		// 整个文件夹加密 / 解密时逐篇保存：每刻看看能不能发下一篇（服务端对保存限速）
+		ClientTickEvents.END_CLIENT_TICK.register(client -> FolderBatch.tick());
 		// 命令文本不带开头的 "/"
 		ClientSendMessageEvents.COMMAND.register(command -> {
 			String c = command.strip();
@@ -142,8 +118,7 @@ public final class CryptoClient {
 			INCOMING.clear();
 			KNOWN_ENCRYPTED.clear();
 			decryptIntent = null;
-			folderEncryptLock = null;
-			folderDecrypt = null;
+			FolderBatch.reset();
 			WAITING_FOR_VAULT.clear();
 			InboxCapture.reset();
 			ClientKeys.disconnect();
@@ -342,14 +317,20 @@ public final class CryptoClient {
 		String body = action.body();
 		switch (action.action()) {
 			case "lock" -> ClientKeys.lock(true);
-			case "lock_folder" -> {
+			case "lock_folder", "resume_folder" -> {
 				boolean requested = lockFolderRequested && System.nanoTime() - lockFolderRequestedAt <= NEW_NOTE_INTENT_NANOS;
 				lockFolderRequested = false;
-				if (requested) {
+				if (!requested) {
+					return;
+				}
+				if (action.action().equals("lock_folder")) {
 					lockFolder(action.title());
+				} else {
+					resumeFolder(action.title(), action.body());
 				}
 			}
 			case "encrypt_folder" -> encryptFolderNote(action);
+			case "encrypt_folder_done" -> FolderBatch.serverDone(FolderBatch.Kind.ENCRYPT, action.title(), parseCount(body));
 			case "folder_password", "unlock_folder" -> {
 				boolean requested = action.action().equals(folderManageRequested)
 						&& System.nanoTime() - folderManageRequestedAt <= NEW_NOTE_INTENT_NANOS;
@@ -364,13 +345,7 @@ public final class CryptoClient {
 				}
 			}
 			case "decrypt_folder" -> decryptFolderNote(action);
-			case "decrypt_folder_done" -> {
-				FolderDecrypt session = folderDecrypt;
-				if (session != null && session.folder.equals(action.title())) {
-					session.serverDone = true;
-					finishFolderDecrypt(session);
-				}
-			}
+			case "decrypt_folder_done" -> FolderBatch.serverDone(FolderBatch.Kind.DECRYPT, action.title(), parseCount(body));
 			case "encrypt_new_folder" -> {
 				boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
 				newNoteRequested = false;
@@ -418,52 +393,100 @@ public final class CryptoClient {
 		mc.gui.setScreen(PasswordScreen.setupFolder(folder, null, created -> {
 			String lockId = KeyRing.folderId(created.content());
 			FolderKeys.put(lockId, created.key());
-			folderEncryptLock = lockId;
-			folderEncryptAt = System.nanoTime();
-			PasswordScreen.tell("message.memorypalace.folder_locked");
 			mc.gui.setScreen(null);
-			ClientPlayNetworking.send(new FolderPayloads.EncryptAll(folder));
+			startEncrypting(folder, lockId, "message.memorypalace.folder_locked");
 		}));
 	}
 
-	/** 服务端发来文件夹里的一篇（明文或旧格式 MPAL1）：用刚设好的文件夹钥匙重新加密后存回去。 */
-	private static void encryptFolderNote(CryptoPayloads.Action action) {
-		String lockId = folderEncryptLock;
-		if (lockId == null || System.nanoTime() - folderEncryptAt > FOLDER_ENCRYPT_NANOS) {
-			return; // 不是刚锁好文件夹时发来的：不认
-		}
-		MasterKey folderKey = FolderKeys.get(lockId);
-		if (folderKey == null) {
-			PasswordScreen.tell("message.memorypalace.folder_encrypt_failed");
+	/**
+	 * 对已经上锁的文件夹再执行 /palace lockfolder：上次没加密完（限速、中途上锁、离开世界……）就接着加密剩下的。
+	 * 需要时输文件夹密码（忘了可以用恢复密钥）。已经用这把锁加密过的笔记服务端不会再发，不会重复加密。
+	 */
+	private static void resumeFolder(String folder, String lock) {
+		Minecraft mc = Minecraft.getInstance();
+		String lockId = folderIdOf(lock);
+		if (lockId == null) {
+			PasswordScreen.tell("message.memorypalace.folder_lock_unavailable");
 			return;
 		}
+		if (FolderKeys.get(lockId) != null) {
+			startEncrypting(folder, lockId, "message.memorypalace.folder_resuming");
+			return;
+		}
+		java.util.function.Consumer<MasterKey> go = key -> {
+			FolderKeys.put(lockId, key);
+			mc.gui.setScreen(null);
+			startEncrypting(folder, lockId, "message.memorypalace.folder_resuming");
+		};
+		mc.gui.setScreen(PasswordScreen.unlockFolder(folder, lock, null, go));
+	}
+
+	private static void startEncrypting(String folder, String lockId, String messageKey) {
+		FolderBatch.start(FolderBatch.Kind.ENCRYPT, folder, lockId, null);
+		PasswordScreen.tell(messageKey);
+		ClientPlayNetworking.send(new FolderPayloads.EncryptAll(folder));
+	}
+
+	private static int parseCount(String text) {
+		try {
+			return Math.max(0, Integer.parseInt(text.strip()));
+		} catch (NumberFormatException e) {
+			return 0;
+		}
+	}
+
+	/** 服务端发来文件夹里的一篇（明文或旧格式 MPAL1）：用这把文件夹钥匙重新加密，排进队列逐篇存回去。 */
+	private static void encryptFolderNote(CryptoPayloads.Action action) {
+		String lockId = FolderBatch.lockId();
+		if (lockId == null || !FolderBatch.active(FolderBatch.Kind.ENCRYPT, lockId)) {
+			return; // 不是正在加密的那一批（玩家没刚锁好 / 没要求继续）：不认
+		}
+		MasterKey folderKey = FolderKeys.get(lockId);
 		String body = action.body();
-		if (NoteEnvelope.isEnvelope(body)) {
-			return; // 已经是新格式了（比如又被锁在了别的文件夹里）：不动
+		if (folderKey == null || NoteEnvelope.isEnvelope(body)) {
+			// 文件夹钥匙没了（中途上锁）；或已经是新格式（比如又被锁在了别的文件夹里）：不动，算失败
+			FolderBatch.failed();
+			return;
 		}
 		if (NoteCipher.isEncrypted(body)) {
 			// 旧格式加密笔记：要先用保险库主密钥解开。保险库还锁着时排队，解锁一次后一起处理
 			if (!ClientKeys.unlocked()) {
 				WAITING_FOR_VAULT.add(action);
+				FolderBatch.hold();
 				if (WAITING_FOR_VAULT.size() == 1) {
 					ClientKeys.requireUnlocked(null, () -> {
 						Minecraft.getInstance().gui.setScreen(null);
 						List<CryptoPayloads.Action> queued = List.copyOf(WAITING_FOR_VAULT);
 						WAITING_FOR_VAULT.clear();
-						folderEncryptAt = System.nanoTime(); // 输密码花的时间不算
-						queued.forEach(CryptoClient::encryptFolderNote);
+						queued.forEach(a -> {
+							encryptFolderNote(a);
+							FolderBatch.release();
+						});
 					});
 				}
 				return;
 			}
 			try {
-				saveWithFolderLock(action.noteId(), NoteCipher.decrypt(ClientKeys.key(), action.noteId(), body), body, lockId, folderKey, null);
+				queueFolderSeal(action.noteId(), NoteCipher.decrypt(ClientKeys.key(), action.noteId(), body), body, lockId, folderKey);
 			} catch (WrongKeyException e) {
-				PasswordScreen.tell("message.memorypalace.folder_encrypt_failed");
+				FolderBatch.failed();
 			}
 			return;
 		}
-		saveWithFolderLock(action.noteId(), body, body, lockId, folderKey, null);
+		queueFolderSeal(action.noteId(), body, body, lockId, folderKey);
+	}
+
+	/** 用文件夹钥匙加密好，排进 FolderBatch 逐篇保存（存成功才记下内容钥匙）。 */
+	private static void queueFolderSeal(UUID id, String plain, String stored, String lockId, MasterKey folderKey) {
+		Sealed sealed = sealWithFolderLock(id, plain, lockId, folderKey);
+		FolderBatch.add(new FolderBatch.SaveJob(id, sealed.text(), Vault.hash(stored), ok -> {
+			if (ok) {
+				rememberEncrypted(id);
+				NoteSealers.remember(id, sealed.key(), sealed.text());
+			} else {
+				sealed.key().destroy();
+			}
+		}));
 	}
 
 	/** 在被锁的文件夹里新建的笔记：解锁文件夹（需要时输文件夹密码）→ 用文件夹钥匙加密 → 存好后打开编辑器。 */
@@ -527,7 +550,7 @@ public final class CryptoClient {
 				return;
 			}
 			FolderKeys.put(lockId, key);
-			folderDecrypt = new FolderDecrypt(folder, lockId, lock);
+			FolderBatch.start(FolderBatch.Kind.DECRYPT, folder, lockId, lock);
 			PasswordScreen.tell("message.memorypalace.folder_unlocking");
 			ClientPlayNetworking.send(new FolderPayloads.DecryptAll(folder));
 		}, Component.translatable("screen.memorypalace.confirm_unlock_folder.title", folder),
@@ -537,65 +560,44 @@ public final class CryptoClient {
 		mc.gui.setScreen(PasswordScreen.verifyFolder(folder, lock, PasswordScreen.t("verify_unlock_folder"), null, confirm, confirm));
 	}
 
-	/** 解除文件夹密码时服务端发来的一篇：用这把文件夹钥匙解开，存回明文。 */
+	/**
+	 * 解除文件夹密码时服务端发来的一篇：用这把文件夹钥匙解开，排进 FolderBatch 逐篇存回明文。
+	 * 全部存好、服务端也说发完了，FolderBatch 才删锁；有失败就不删（锁还在，没解开的笔记照样能用文件夹密码打开）。
+	 */
 	private static void decryptFolderNote(CryptoPayloads.Action action) {
-		FolderDecrypt session = folderDecrypt;
-		if (session == null || System.nanoTime() - session.startedAt > FOLDER_DECRYPT_NANOS) {
-			return; // 不是玩家刚确认过的解除：不认
-		}
+		String lockId = FolderBatch.lockId();
 		UUID id = action.noteId();
 		String body = action.body();
-		// 只解这把锁的笔记：服务端不能借机让客户端解开别的文件夹（或者别的锁）的笔记
-		if (!NoteEnvelope.isEnvelope(body) || !session.lockId.equals(folderLockOf(body))) {
+		// 只认正在解除的那一批，只解这把锁的笔记：服务端不能借机让客户端解开别的文件夹（或者别的锁）的笔记
+		if (lockId == null || !FolderBatch.active(FolderBatch.Kind.DECRYPT, lockId)
+				|| !NoteEnvelope.isEnvelope(body) || !lockId.equals(folderLockOf(body))) {
 			return;
 		}
-		MasterKey folderKey = FolderKeys.get(session.lockId);
+		MasterKey folderKey = FolderKeys.get(lockId);
 		if (folderKey == null) {
-			session.failed++;
+			FolderBatch.failed();
 			return;
 		}
 		byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
 		String plain;
 		try {
-			ContentKey contentKey = NoteEnvelope.unlock(id, body, new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, session.lockId), wrapping);
+			ContentKey contentKey = NoteEnvelope.unlock(id, body, new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId), wrapping);
 			try {
 				plain = NoteEnvelope.decrypt(id, body, contentKey);
 			} finally {
 				contentKey.destroy();
 			}
 		} catch (WrongKeyException e) {
-			session.failed++;
+			FolderBatch.failed();
 			return;
 		} finally {
 			java.util.Arrays.fill(wrapping, (byte) 0);
 		}
-		session.outstanding++;
-		NoteSaver.saveDecrypted(id, plain, Vault.hash(body), result -> {
-			session.outstanding--;
-			if ("OK".equals(result.result())) {
-				KNOWN_ENCRYPTED.remove(id); // 是自己解除的：以后它以明文出现是正常的
-			} else {
-				session.failed++;
-			}
-			finishFolderDecrypt(session);
-		});
-	}
-
-	/** 服务端发完了、也都存好了：删锁文件。有失败的就不删，锁还在，没解开的笔记照样能用文件夹密码打开。 */
-	private static void finishFolderDecrypt(FolderDecrypt session) {
-		if (folderDecrypt != session || !session.serverDone || session.outstanding > 0) {
-			return;
-		}
-		folderDecrypt = null;
-		if (session.failed > 0) {
-			PasswordScreen.tell("message.memorypalace.folder_unlock_incomplete");
-			return;
-		}
-		FolderKeys.deleteLock(session.folder, session.lock, ok -> {
+		FolderBatch.add(new FolderBatch.SaveJob(id, plain, Vault.hash(body), ok -> {
 			if (ok) {
-				PasswordScreen.tell("message.memorypalace.folder_unlocked");
+				KNOWN_ENCRYPTED.remove(id); // 是自己解除的：以后它以明文出现是正常的
 			}
-		});
+		}));
 	}
 
 	private static String folderIdOf(String lock) {
@@ -606,21 +608,30 @@ public final class CryptoClient {
 		}
 	}
 
-	/**
-	 * 用文件夹钥匙给这篇加密并存回去：新的内容钥匙，只有一把 f 锁（保险库密码打不开）。
-	 * stored 是服务端那边现在的正文（用来核对存的时候没有被别人改过）。存好后记下内容钥匙，之后编辑保存用。
-	 */
-	private static void saveWithFolderLock(UUID id, String plain, String stored, String lockId, MasterKey folderKey,
-			java.util.function.Consumer<EditPayloads.SaveResult> after) {
+	/** 用文件夹钥匙加密好的一篇：新的内容钥匙 + 密文。 */
+	private record Sealed(ContentKey key, String text) {}
+
+	/** 用文件夹钥匙给这篇加密：新的内容钥匙，只有一把 f 锁（保险库密码打不开）。 */
+	private static Sealed sealWithFolderLock(UUID id, String plain, String lockId, MasterKey folderKey) {
 		ContentKey contentKey = ContentKey.random();
 		byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
-		String sealed;
 		try {
-			sealed = NoteEnvelope.seal(id, contentKey, plain,
-					java.util.Map.of(new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId), wrapping));
+			return new Sealed(contentKey, NoteEnvelope.seal(id, contentKey, plain,
+					java.util.Map.of(new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId), wrapping)));
 		} finally {
 			java.util.Arrays.fill(wrapping, (byte) 0);
 		}
+	}
+
+	/**
+	 * 加密单独一篇并马上存回去（在被锁的文件夹里新建笔记时）。stored 是服务端那边现在的正文（用来核对没被别人改过）。
+	 * 存好后记下内容钥匙，之后编辑保存用。
+	 */
+	private static void saveWithFolderLock(UUID id, String plain, String stored, String lockId, MasterKey folderKey,
+			java.util.function.Consumer<EditPayloads.SaveResult> after) {
+		Sealed s = sealWithFolderLock(id, plain, lockId, folderKey);
+		ContentKey contentKey = s.key();
+		String sealed = s.text();
 		NoteSaver.save(id, sealed, Vault.hash(stored), result -> {
 			if ("OK".equals(result.result())) {
 				rememberEncrypted(id);

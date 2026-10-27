@@ -654,6 +654,12 @@ public final class PalaceCommands {
 				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", input));
 				return 0;
 			}
+			// 这个文件夹自己已经有锁：上次没加密完（保存限速、中途上锁、掉线）也能用同一条命令接着做完
+			Optional<String> existing = FolderPayloads.lockAt(vault, folder);
+			if (existing.isPresent()) {
+				CryptoPayloads.sendAction(player, new UUID(0, 0), "resume_folder", folder, existing.get());
+				return 1;
+			}
 			if (FolderLocks.lockedFolder(vault, folder).isPresent() || FolderPayloads.hasLockInside(vault, folder)) {
 				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_already_locked"));
 				return 0;
