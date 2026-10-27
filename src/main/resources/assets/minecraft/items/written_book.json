@@ -1,0 +1,26 @@
+{
+  "model": {
+    "type": "minecraft:select",
+    "property": "minecraft:custom_model_data",
+    "cases": [
+      {
+        "when": "memorypalace:memory_note",
+        "model": {
+          "type": "minecraft:model",
+          "model": "memorypalace:item/memory_note"
+        }
+      },
+      {
+        "when": "memorypalace:locked_note",
+        "model": {
+          "type": "minecraft:model",
+          "model": "memorypalace:item/locked_note"
+        }
+      }
+    ],
+    "fallback": {
+      "type": "minecraft:model",
+      "model": "minecraft:item/written_book"
+    }
+  }
+}

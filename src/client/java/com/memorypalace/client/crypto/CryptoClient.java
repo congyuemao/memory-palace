@@ -149,7 +149,10 @@ public final class CryptoClient {
 
 	/** /palace new 之后服务端让客户端直接打开编辑器。 */
 	public static void openEditor(EditPayloads.OpenEditor payload) {
-		boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
+		// 或者刚右键了"普通"空白记忆笔记（右键上锁笔记之后绝不认：那样秘密会以明文存回去）
+		boolean item = PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.PLAIN_BLANK), null,
+				NEW_NOTE_INTENT_NANOS);
+		boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS || item;
 		newNoteRequested = false;
 		if (!requested || KNOWN_ENCRYPTED.contains(payload.noteId()) || Ciphertext.isEncrypted(payload.body())
 				|| InboxCipher.hasSealedLines(payload.body())) {
@@ -456,15 +459,29 @@ public final class CryptoClient {
 			case "restore_version" -> restoreVersion(id, action.title(), body);
 			case "decrypt_folder" -> decryptFolderNote(action);
 			case "decrypt_folder_done" -> FolderBatch.serverDone(FolderBatch.Kind.DECRYPT, action.title(), parseCount(body));
+			case "copy_encrypted" -> {
+				// 刚右键了抄这一篇的空白抄本：用自己的钥匙解开原笔记，按新笔记重新加密存进去
+				if (PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.COPY), copySource(body),
+						NEW_NOTE_INTENT_NANOS)) {
+					copyEncrypted(id, body);
+				}
+			}
 			case "encrypt_new_folder" -> {
-				boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
+				// 建在被锁的文件夹里：三种空白笔记右键新建都会走到这里（结果是加密，不会降级成明文）
+				boolean item = PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.PLAIN_BLANK,
+						PalaceInteractions.ItemUse.LOCKED_BLANK, PalaceInteractions.ItemUse.COPY), null, NEW_NOTE_INTENT_NANOS);
+				boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS || item;
 				newNoteRequested = false;
 				if (requested) {
 					newFolderNote(id, title, body);
 				}
 			}
 			case "encrypt", "encrypt_new" -> {
-				boolean requested = encryptRequested && System.nanoTime() - encryptRequestedAt <= NEW_NOTE_INTENT_NANOS;
+				// 亲手输入的 /palace encrypt、newsecret，或者刚右键了空白上锁笔记 / 待上锁的笔记书
+				boolean item = "encrypt".equals(action.action())
+						? PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.PENDING_LOCK), id, NEW_NOTE_INTENT_NANOS)
+						: PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.LOCKED_BLANK), null, NEW_NOTE_INTENT_NANOS);
+				boolean requested = encryptRequested && System.nanoTime() - encryptRequestedAt <= NEW_NOTE_INTENT_NANOS || item;
 				encryptRequested = false;
 				if (!requested) {
 					return;
@@ -623,6 +640,49 @@ public final class CryptoClient {
 			}
 			mc.gui.setScreen(null);
 		});
+	}
+
+	// ---- 抄本 ----
+
+	/**
+	 * 抄一篇加密笔记：packed = "原笔记ID:原密文"。用自己的钥匙解开原笔记（需要时输保险库密码或文件夹密码），
+	 * 再用保险库主密钥按新笔记的 ID 加密（密文绑定笔记 ID，不能直接复制），存进服务端刚建好的新笔记。
+	 */
+	/** "原笔记ID:原密文" 里的原笔记 ID；格式不对时用一个不会和任何右键对上的 ID。 */
+	private static UUID copySource(String packed) {
+		int colon = packed.indexOf(':');
+		try {
+			return colon < 0 ? new UUID(0, 0) : UUID.fromString(packed.substring(0, colon));
+		} catch (IllegalArgumentException e) {
+			return new UUID(0, 0);
+		}
+	}
+
+	private static void copyEncrypted(UUID newId, String packed) {
+		int colon = packed.indexOf(':');
+		UUID sourceId;
+		try {
+			sourceId = colon < 0 ? null : UUID.fromString(packed.substring(0, colon));
+		} catch (IllegalArgumentException e) {
+			sourceId = null;
+		}
+		String cipher = colon < 0 ? "" : packed.substring(colon + 1);
+		if (sourceId == null || sourceId.equals(newId) || !Ciphertext.isEncrypted(cipher)) {
+			return;
+		}
+		Minecraft mc = Minecraft.getInstance();
+		withPlain(sourceId, cipher, plain -> ClientKeys.requireUnlocked(null, () -> {
+			String sealed = NoteCipher.encrypt(ClientKeys.key(), newId, plain);
+			// 新笔记是服务端刚建的（只有一行默认标题），不核对旧内容
+			NoteSaver.save(newId, sealed, null, result -> {
+				boolean ok = "OK".equals(result.result());
+				if (ok) {
+					rememberEncrypted(newId);
+				}
+				PasswordScreen.tell(ok ? "message.memorypalace.copied_encrypted" : "message.memorypalace.crypto_failed");
+				mc.gui.setScreen(null);
+			});
+		}));
 	}
 
 	// ---- 历史版本 ----

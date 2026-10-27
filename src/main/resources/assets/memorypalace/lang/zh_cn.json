@@ -280,5 +280,11 @@
 	"screen.memorypalace.confirm_restore.message": "这个版本的开头：%s\n现在的内容会留一份历史，之后可以再还原回来。",
 	"screen.memorypalace.confirm_restore.yes": "还原",
 	"message.memorypalace.restore_history_failed": "没有还原：现在的内容存不进历史版本（服务器硬盘可能满了或没有写入权限），还原了就找不回来",
-	"message.memorypalace.restored":"已还原。还原前的内容留在历史版本里（/palace history）"
+	"message.memorypalace.restored": "已还原。还原前的内容留在历史版本里（/palace history）",
+	"message.memorypalace.create_denied": "你没有新建笔记的权限",
+	"message.memorypalace.too_long_to_copy": "原笔记太长（超过 %s 字），抄不了",
+	"message.memorypalace.copy_into_locked_folder": "抄本所在的文件夹设了密码，只建好了一篇空笔记，内容没有抄过去",
+	"message.memorypalace.lock_owner_only": "只有作者能给这篇笔记上锁，先按普通笔记打开",
+	"message.memorypalace.copied_encrypted": "已抄写：新笔记用你的保险库密码加密",
+	"message.memorypalace.lock_in_progress": "正在给这篇上锁，请在弹出的窗口里完成（30 秒后可以再试）"
 }

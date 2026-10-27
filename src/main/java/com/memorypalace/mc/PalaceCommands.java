@@ -468,26 +468,57 @@ public final class PalaceCommands {
 	 * - 普通玩家：建在自己的个人区 players/&lt;UUID&gt;/ 下，作者是自己，受配置文件里的篇数上限限制
 	 */
 	private static int create(CommandContext<CommandSourceStack> ctx, boolean secret) throws CommandSyntaxException {
-		Vault vault = requireVault(ctx);
-		if (vault == null) {
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		String input = StringArgumentType.getString(ctx, "path").strip();
+		Optional<Created> created = createNote(player, input, "", secret, error -> ctx.getSource().sendFailure(error));
+		if (created.isEmpty()) {
 			return 0;
 		}
-		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		player.getInventory().placeItemBackInInventory(NoteBooks.create(created.get().note()), Prediction.SERVER_ONLY);
+		openCreated(player, created.get(), secret);
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.created", created.get().note().relativePath()), false);
+		return 1;
+	}
+
+	/** 新建好的笔记：note、它现在的正文、它在不在被锁的文件夹里（在的话是哪个）。 */
+	record Created(NoteSummary note, String body, Optional<String> lockedFolder) {}
+
+	/**
+	 * 新建一篇笔记（/palace new、/palace newsecret、右键空白记忆笔记、抄本共用），检查权限、限速、篇数上限、被锁的文件夹。
+	 * - 房主、管理员：建在 input 这个位置；普通玩家：建在自己的个人区 players/&lt;UUID&gt;/ 下
+	 * - body 为 "" 时用默认的一行标题
+	 * 失败时把原因交给 fail，返回 empty。
+	 */
+	static Optional<Created> createNote(ServerPlayer player, String input, String body, boolean secret,
+			java.util.function.Consumer<Component> fail) {
+		Vault vault = PalaceServer.vault();
+		if (vault == null) {
+			fail.accept(Component.translatable("message.memorypalace.no_vault"));
+			return Optional.empty();
+		}
+		if (!PalaceAccess.allowed(player, PalaceAccess.CREATE)) {
+			fail.accept(Component.translatable("message.memorypalace.create_denied"));
+			return Optional.empty();
+		}
 		if (secret && !CryptoPayloads.allowed(player)) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_denied"));
-			return 0;
+			fail.accept(Component.translatable("command.memorypalace.crypto_denied"));
+			return Optional.empty();
 		}
 		boolean admin = PalaceAccess.admin(player);
 		if (!admin && !WRITE_RATE.tryTake(player.getUUID())) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
-			return 0;
+			fail.accept(Component.translatable("command.memorypalace.too_fast"));
+			return Optional.empty();
 		}
 		int maxNotes = PalaceConfig.get().maxNotesPerPlayer();
 		if (!admin && maxNotes > 0 && vault.list().stream().filter(n -> player.getUUID().equals(n.access().owner())).count() >= maxNotes) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.quota_notes", maxNotes));
-			return 0;
+			fail.accept(Component.translatable("command.memorypalace.quota_notes", maxNotes));
+			return Optional.empty();
 		}
-		String input = StringArgumentType.getString(ctx, "path").strip();
+		int maxChars = PalaceConfig.get().maxNoteChars();
+		if (!admin && maxChars > 0 && body.length() > maxChars) {
+			fail.accept(Component.translatable("message.memorypalace.too_long_to_copy", maxChars));
+			return Optional.empty();
+		}
 		String path = admin ? input : personalFolder(player) + "/" + input;
 		UUID owner = PalaceAccess.isHost(player) ? null : player.getUUID();
 		// 建在被锁的文件夹里：只有能管这个文件夹的人能建，建好马上用文件夹钥匙加密
@@ -500,34 +531,35 @@ public final class PalaceCommands {
 			locked = Optional.empty(); // 路径不合法：交给 createNote 报错
 		}
 		if (locked.isPresent() && !FolderPayloads.mayManage(player, locked.get())) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_denied"));
-			return 0;
+			fail.accept(Component.translatable("command.memorypalace.folder_denied"));
+			return Optional.empty();
 		}
-		NoteSummary note;
-		String body;
+		// 被锁的文件夹里不能先存明文（抄本的正文要等客户端加密好再存）
+		String initial = locked.isPresent() ? "" : body;
 		try {
-			note = vault.createNote(path, "", owner);
-			body = vault.readBody(note.id()).orElse("");
+			NoteSummary note = vault.createNote(path, initial, owner);
+			return Optional.of(new Created(note, vault.readBody(note.id()).orElse(""), locked));
 		} catch (IllegalArgumentException e) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.new_failed", e.getMessage()));
-			return 0;
+			fail.accept(Component.translatable("command.memorypalace.new_failed", e.getMessage()));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("新建笔记失败：{}", path, e);
-			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
-			return 0;
+			fail.accept(Component.translatable("message.memorypalace.read_failed"));
 		}
-		player.getInventory().placeItemBackInInventory(NoteBooks.create(note), Prediction.SERVER_ONLY);
-		if (locked.isPresent()) {
+		return Optional.empty();
+	}
+
+	/** 新建好之后：被锁的文件夹里的、要加密的先让客户端加密，其余直接打开游戏内编辑器。 */
+	static void openCreated(ServerPlayer player, Created created, boolean secret) {
+		NoteSummary note = created.note();
+		String body = created.body();
+		if (created.lockedFolder().isPresent()) {
 			CryptoPayloads.sendAction(player, note.id(), "encrypt_new_folder", note.title(), body);
 		} else if (secret) {
 			CryptoPayloads.sendAction(player, note.id(), "encrypt_new", note.title(), body);
-		} else {
-			// 新建的笔记只有一行标题，一定在 MAX_BODY 以内
+		} else if (body.length() <= OpenNotePayload.MAX_BODY) {
 			ServerPlayNetworking.send(player, new EditPayloads.OpenEditor(note.id(),
 					OpenNotePayload.clip(note.title(), OpenNotePayload.MAX_TITLE), body));
 		}
-		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.created", note.relativePath()), false);
-		return 1;
 	}
 
 	/**

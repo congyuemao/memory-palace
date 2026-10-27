@@ -280,5 +280,11 @@
 	"screen.memorypalace.confirm_restore.message": "This version begins: %s\nThe current content is kept in history, so you can restore it later.",
 	"screen.memorypalace.confirm_restore.yes": "Restore",
 	"message.memorypalace.restore_history_failed": "Not restored: the current content could not be saved to history (the server disk may be full or read-only), so it could not be recovered afterwards",
-	"message.memorypalace.restored":"Restored. The previous content is kept in history (/palace history)"
+	"message.memorypalace.restored": "Restored. The previous content is kept in history (/palace history)",
+	"message.memorypalace.create_denied": "You don't have permission to create notes",
+	"message.memorypalace.too_long_to_copy": "The original note is too long (over %s characters) to copy",
+	"message.memorypalace.copy_into_locked_folder": "The copy's folder is password-protected, so only an empty note was created; the content was not copied",
+	"message.memorypalace.lock_owner_only": "Only the author can lock this note; opening it as a normal note",
+	"message.memorypalace.copied_encrypted": "Copied: the new note is encrypted with your vault password",
+	"message.memorypalace.lock_in_progress": "This note is being locked; finish it in the window that opened (you can retry after 30 seconds)"
 }

@@ -64,6 +64,19 @@ public final class PalaceInteractions {
 		// 快速切换物品栏再右键时不会打开上一格的书。返回 null = 不处理，交给原版
 		ItemEvents.USE.register((level, player, hand) -> {
 			ItemStack stack = player.getItemInHand(hand);
+			// 空白记忆笔记（含上锁的、抄本）：新建 / 抄写一篇（见 NoteItemUse）
+			if (NoteItems.isBlank(stack)) {
+				if (level.isClientSide()) {
+					Optional<UUID> source = NoteItems.copyOf(stack);
+					markLocalItemUse(source.isPresent() ? ItemUse.COPY
+							: NoteItems.isBlankLocked(stack) ? ItemUse.LOCKED_BLANK : ItemUse.PLAIN_BLANK, source.orElse(null));
+				} else if (player instanceof ServerPlayer serverPlayer && PalaceAccess.enabled(serverPlayer)) {
+					NoteItemUse.useBlank(serverPlayer, stack);
+				} else if (player instanceof ServerPlayer serverPlayer) {
+					serverPlayer.sendSystemMessage(Component.translatable("message.memorypalace.multiplayer_off"));
+				}
+				return InteractionResult.SUCCESS;
+			}
 			Optional<UUID> id = NoteBooks.idOf(stack);
 			if (id.isEmpty()) {
 				return null;
@@ -71,10 +84,16 @@ public final class PalaceInteractions {
 			// 客户端也返回 SUCCESS，挡住原版在客户端直接打开看书界面
 			if (level.isClientSide()) {
 				markLocalOpen(id.get());
+				if (NoteItems.pendingLock(stack)) {
+					markLocalItemUse(ItemUse.PENDING_LOCK, id.get());
+				}
 			}
 			if (player instanceof ServerPlayer serverPlayer) {
 				refreshBook(stack, id.get());
-				openNote(serverPlayer, id.get());
+				// 待上锁的书：作者右键时先加密，不打开
+				if (!(PalaceAccess.enabled(serverPlayer) && NoteItemUse.lockPending(serverPlayer, stack, id.get()))) {
+					openNote(serverPlayer, id.get());
+				}
 			}
 			return InteractionResult.SUCCESS;
 		});
@@ -178,6 +197,41 @@ public final class PalaceInteractions {
 	/** 客户端用：离开世界、进入世界时清掉（不能把上一个服务器里的右键带到下一个服务器）。 */
 	public static void clearLocalOpen() {
 		localOpen = null;
+		localItemUse = null;
+	}
+
+	/** 右键的是哪种记忆笔记物品。 */
+	public enum ItemUse {
+		/** 普通空白记忆笔记：之后只认"打开编辑器"（或建在被锁的文件夹里时的"用文件夹钥匙加密"）。 */
+		PLAIN_BLANK,
+		/** 空白上锁笔记：之后只认"加密新笔记"（或文件夹加密）——绝不认"打开普通编辑器"，不然秘密会以明文存回去。 */
+		LOCKED_BLANK,
+		/** 空白抄本（noteId = 原笔记）：之后只认抄这一篇的"按新笔记加密"（或文件夹加密）。 */
+		COPY,
+		/** 待上锁的笔记书（noteId = 这篇）：之后只认加密这一篇。 */
+		PENDING_LOCK
+	}
+
+	// 客户端这一侧：玩家上一次亲手右键记忆笔记物品是哪种、哪篇、什么时候。服务端接着发来的
+	// "打开编辑器 / 加密这篇 / 按抄本加密"，客户端只在刚右键过（几秒内、用一次作废）、而且种类对得上时才认，
+	// 和亲手输入 /palace new、/palace encrypt 一样算玩家自己要的
+	private record LocalItemUse(ItemUse kind, UUID noteId, long atNanos) {}
+
+	private static volatile LocalItemUse localItemUse;
+
+	private static void markLocalItemUse(ItemUse kind, UUID noteId) {
+		localItemUse = new LocalItemUse(kind, noteId, System.nanoTime());
+	}
+
+	/**
+	 * 客户端用：玩家是不是在 withinNanos 之内亲手右键过 kinds 里的某种物品（noteId 不为 null 时还要是这一篇）。
+	 * 不管对不对得上都用掉（一次右键只换一次服务端请求）。
+	 */
+	public static boolean takeLocalItemUse(java.util.Set<ItemUse> kinds, UUID noteId, long withinNanos) {
+		LocalItemUse use = localItemUse;
+		localItemUse = null;
+		return use != null && System.nanoTime() - use.atNanos() <= withinNanos && kinds.contains(use.kind())
+				&& (noteId == null || noteId.equals(use.noteId()));
 	}
 
 	/**

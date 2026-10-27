@@ -33,6 +33,7 @@ public final class NoteBooks {
 		CompoundTag data = new CompoundTag();
 		data.putString(TAG_ID, note.id().toString());
 		CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> tag.put(TAG_ROOT, data));
+		NoteItems.setModel(stack, note.encrypted());
 		return stack;
 	}
 
@@ -69,11 +70,14 @@ public final class NoteBooks {
 	 * @return 有没有改动（改了的话，书在方块里时调用方要 setChanged）
 	 */
 	public static boolean refresh(ItemStack stack, NoteSummary note) {
+		// 贴图跟着笔记走：加密了（或者等着上锁）画成上锁笔记；已经加密好了就不再"待上锁"
+		boolean changed = note.encrypted() && NoteItems.clearPendingLock(stack);
+		changed |= NoteItems.setModel(stack, note.encrypted() || NoteItems.pendingLock(stack));
 		// 书名和书页都要对得上：同一个书名下，书页里的路径也可能已经过时（比如笔记改成了私密）
 		WrittenBookContent content = stack.get(DataComponents.WRITTEN_BOOK_CONTENT);
 		if (content != null && content.title().raw().equals(titleFor(note))
 				&& content.pages().size() == 1 && content.pages().getFirst().raw().equals(pageFor(note))) {
-			return false;
+			return changed;
 		}
 		setContent(stack, note);
 		return true;
