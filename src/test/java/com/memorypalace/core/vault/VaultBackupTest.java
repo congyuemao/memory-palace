@@ -91,6 +91,69 @@ class VaultBackupTest {
 		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).isPresent());
 	}
 
+	private String zipText(Path zip, String entry) throws IOException {
+		try (ZipFile z = new ZipFile(zip.toFile(), StandardCharsets.UTF_8)) {
+			var e = z.getEntry(entry);
+			assertNotNull(e, "ZIP 里应有 " + entry);
+			try (var in = z.getInputStream(e)) {
+				return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			}
+		}
+	}
+
+	// 下面几种变化都不会让任何文件的修改时间晚于上次备份（迁入的旧笔记、改名、删除、改完还原时间），
+	// 只看修改时间就会漏备份，必须比较内容。
+	private static final Instant OLD = T0.minusSeconds(86400);
+
+	private Path firstBackup() throws IOException {
+		write("a.md", "A", OLD);
+		write("线代/b.md", "BBBB", OLD);
+		return VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+	}
+
+	@Test
+	void backsUpAddedFileWithOldTimestamp() throws IOException {
+		firstBackup();
+		write("迁入/旧笔记.md", "# 从别的笔记库搬来", OLD.minusSeconds(86400));
+		Path zip = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of("a.md", "线代/b.md", "迁入/旧笔记.md"), zipEntries(zip));
+		assertEquals("# 从别的笔记库搬来", zipText(zip, "迁入/旧笔记.md"));
+	}
+
+	@Test
+	void backsUpRenamedFile() throws IOException {
+		firstBackup();
+		Files.move(vault().resolve("线代/b.md"), vault().resolve("线代/c.md"));
+		Files.setLastModifiedTime(vault().resolve("线代/c.md"), FileTime.from(OLD));
+		Path zip = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of("a.md", "线代/c.md"), zipEntries(zip));
+		assertEquals("BBBB", zipText(zip, "线代/c.md"));
+	}
+
+	@Test
+	void backsUpDeletion() throws IOException {
+		firstBackup();
+		Files.delete(vault().resolve("线代/b.md"));
+		Path zip = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of("a.md"), zipEntries(zip));
+	}
+
+	@Test
+	void backsUpContentChangeWithOldTimestamp() throws IOException {
+		firstBackup();
+		write("线代/b.md", "XXXX", OLD); // 长度相同、修改时间还原
+		Path zip = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals("XXXX", zipText(zip, "线代/b.md"));
+		write("a.md", "longer text", OLD); // 长度不同
+		Path third = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).orElseThrow();
+		assertEquals("longer text", zipText(third, "a.md"));
+		assertEquals("XXXX", zipText(third, "线代/b.md"));
+		// 内容没再变：不重复备份，哪怕修改时间被碰到了未来
+		Files.setLastModifiedTime(vault().resolve("a.md"), FileTime.from(Instant.now().plusSeconds(3600)));
+		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(180))).isEmpty());
+		assertEquals(List.of("2026-10-27T03-04-05Z.zip", "2026-10-27T03-05-05Z.zip", "2026-10-27T03-06-05Z.zip"), backupNames());
+	}
+
 	@Test
 	void sameSecondGetsSuffix() throws IOException {
 		write("a.md", "A", T0.minusSeconds(3600));

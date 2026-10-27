@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.FileTime;
 import java.time.Clock;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -48,8 +47,8 @@ public final class VaultBackup {
 	 * - 包括隐藏文件夹（.palace/ 里的位置记录也要备份），但跳过名字以 ".palace-" 开头、".tmp" 结尾的临时文件
 	 * - 原子写入：先写 backupDir 里的临时文件，写完再 move 成正式文件名；中途失败不能留下正式文件名的半成品，也不留临时文件
 	 * - backupDir 不存在时自动创建
-	 * - 如果笔记库里所有文件的最后修改时间都不晚于最新一个已有备份的修改时间（即"自上次备份以来没改过"），
-	 *   则不备份，返回 empty
+	 * - 如果打包结果与最新一个已有备份的内容完全相同（文件路径集合和每个文件的字节都一样），则不备份，返回 empty。
+	 *   只按内容判断、不看修改时间：迁入带旧修改时间的笔记、改名、删除、改完还原修改时间都必须能备份上
 	 * - 笔记库为空（没有任何文件）时不备份，返回 empty
 	 * - 备份完成后清理：backupDir 里符合上面文件名格式的 .zip 只保留最新的 keep 个（按文件名表示的时刻排序，旧的删掉）；
 	 *   不符合格式的文件一律不动
@@ -62,16 +61,13 @@ public final class VaultBackup {
 		}
 		Files.createDirectories(backupDir);
 		List<Path> backups = listBackups(backupDir);
-		FileTime previous = backups.isEmpty() ? null : Files.getLastModifiedTime(backups.getLast());
 		List<Path> files = new ArrayList<>();
-		List<FileTime> modified = new ArrayList<>();
 		Files.walkFileTree(vaultRoot, new SimpleFileVisitor<Path>() {
 			@Override
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
 				String name = file.getFileName().toString();
 				if (attrs.isRegularFile() && !(name.startsWith(".palace-") && name.endsWith(".tmp"))) {
 					files.add(file);
-					modified.add(attrs.lastModifiedTime());
 				}
 				return FileVisitResult.CONTINUE;
 			}
@@ -84,7 +80,7 @@ public final class VaultBackup {
 				return FileVisitResult.CONTINUE;
 			}
 		});
-		if (files.isEmpty() || previous != null && modified.stream().allMatch(time -> time.compareTo(previous) <= 0)) {
+		if (files.isEmpty()) {
 			return Optional.empty();
 		}
 		String timestamp = TIMESTAMP.format(clock.instant().atZone(java.time.ZoneOffset.UTC));
@@ -113,7 +109,7 @@ public final class VaultBackup {
 			if (count == 0) {
 				return Optional.empty();
 			}
-			// 文件时间可能在未来；内容未变时仍避免重复备份。
+			// 是否变化只看内容：修改时间可能在未来，也可能比上次备份还旧（迁入、改名、删除、还原时间）。
 			if (!backups.isEmpty() && sameContents(temporary, backups.getLast())) {
 				return Optional.empty();
 			}
