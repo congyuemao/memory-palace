@@ -1,6 +1,8 @@
 package com.memorypalace.core.search;
 
+import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.NoteEnvelope;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 
@@ -97,7 +99,12 @@ public final class NoteSearch {
 			try {
 				String body = vault.readBody(note.id()).orElse("");
 				// 外部编辑可能让索引过期，密文仍不能参与匹配或片段生成。
-				return NoteCipher.isEncrypted(body) ? "" : body;
+				if (NoteCipher.isEncrypted(body) || NoteEnvelope.isEnvelope(body)) {
+					return "";
+				}
+				// 收件箱里客户端加密的随手记（MPALBOX1 行）：服务端解不开，去掉，不拿乱码去匹配
+				return InboxCipher.hasSealedLines(body)
+						? String.join("\n", body.lines().filter(line -> !InboxCipher.isSealed(line)).toList()) : body;
 			} catch (IOException e) {
 				return "";
 			}

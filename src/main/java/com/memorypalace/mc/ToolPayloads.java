@@ -1,6 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.search.NoteSearch;
 import com.memorypalace.core.vault.Inbox;
 import com.memorypalace.core.vault.NoteAccess;
@@ -58,6 +59,23 @@ public final class ToolPayloads {
 				ByteBufCodecs.stringUtf8(MAX_CAPTURE), Capture::text,
 				ByteBufCodecs.stringUtf8(64), Capture::localTime,
 				Capture::new);
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * 客户端 → 服务端：记进今天的收件箱，但内容已经在客户端用收件箱公钥加密好了（InboxCipher.seal，一行 "MPALBOX1:…"）。
+	 * 服务端只看得到"哪天记了一条、大概多长"，看不到内容。localTime 同 Capture，只用来决定记进哪一天。
+	 */
+	public record CaptureSealed(String line, String localTime) implements CustomPacketPayload {
+		public static final Type<CaptureSealed> TYPE = new Type<>(MemoryPalace.id("capture_sealed"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, CaptureSealed> CODEC = StreamCodec.composite(
+				ByteBufCodecs.stringUtf8(InboxCipher.MAX_SEALED_CHARS), CaptureSealed::line,
+				ByteBufCodecs.stringUtf8(64), CaptureSealed::localTime,
+				CaptureSealed::new);
 
 		@Override
 		public Type<? extends CustomPacketPayload> type() {
@@ -160,6 +178,7 @@ public final class ToolPayloads {
 
 	public static void register() {
 		PayloadTypeRegistry.serverboundPlay().register(Capture.TYPE, Capture.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(CaptureSealed.TYPE, CaptureSealed.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(LookQuery.TYPE, LookQuery.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(Search.TYPE, Search.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(OpenById.TYPE, OpenById.CODEC);
@@ -167,14 +186,10 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
 		// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/
-		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> {
-			if (PalaceAccess.allowed(ctx.player(), PalaceAccess.CREATE)) {
-				capture(ctx.player(), p.text(), p.localTime());
-			} else {
-				ctx.player().sendSystemMessage(Component.translatable(PalaceAccess.enabled(ctx.player())
-						? "message.memorypalace.admin_only" : "message.memorypalace.multiplayer_off"));
-			}
-		});
+		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE,
+				(p, ctx) -> capture(ctx.player(), p.localTime(), (vault, owner, time) -> Inbox.append(vault, owner, time, p.text())));
+		ServerPlayNetworking.registerGlobalReceiver(CaptureSealed.TYPE,
+				(p, ctx) -> capture(ctx.player(), p.localTime(), (vault, owner, time) -> Inbox.appendSealed(vault, owner, time, p.line())));
 		// 准星书名、搜索：谁都能用，但只看得到自己读得了的笔记（每一篇单独检查）
 		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
@@ -185,7 +200,19 @@ public final class ToolPayloads {
 	private static final long CAPTURE_INTERVAL_MS = 200;
 	private static final Map<UUID, Long> LAST_CAPTURE = new ConcurrentHashMap<>();
 
-	private static void capture(ServerPlayer player, String text, String localTime) {
+	/** 往收件箱里写一条：明文（Inbox.append）或客户端加密好的（Inbox.appendSealed）。 */
+	@FunctionalInterface
+	private interface InboxWrite {
+		NoteSummary write(Vault vault, UUID owner, OffsetDateTime time) throws IOException;
+	}
+
+	// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/
+	private static void capture(ServerPlayer player, String localTime, InboxWrite write) {
+		if (!PalaceAccess.allowed(player, PalaceAccess.CREATE)) {
+			player.sendSystemMessage(Component.translatable(PalaceAccess.enabled(player)
+					? "message.memorypalace.admin_only" : "message.memorypalace.multiplayer_off"));
+			return;
+		}
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
@@ -206,10 +233,10 @@ public final class ToolPayloads {
 			return;
 		}
 		try {
-			NoteSummary inbox = Inbox.append(vault, owner, time, text);
+			NoteSummary inbox = write.write(vault, owner, time);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.captured", inbox.relativePath()));
 		} catch (IllegalArgumentException e) {
-			// 空内容：什么都不做
+			// 空内容、不是合法的收件箱密文：什么都不做
 		} catch (Inbox.NotYoursException e) {
 			MemoryPalace.LOGGER.warn("{} 的收件箱文件作者不是本人，拒绝写入", player.getName().getString());
 			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_not_yours"));

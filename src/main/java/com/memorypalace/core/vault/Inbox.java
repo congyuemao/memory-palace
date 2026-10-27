@@ -1,6 +1,8 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.NoteEnvelope;
 
 import java.io.IOException;
 import java.time.OffsetDateTime;
@@ -52,7 +54,8 @@ public final class Inbox {
 	 * - 当天文件不存在：用 vault.createNote 新建，正文为 "# 收件箱 yyyy-MM-dd\n\n- HH:mm (UTC+x) 内容\n"
 	 * - 当天文件已存在：在正文末尾追加一行（正文不以换行结尾时先补一个 "\n"），用 vault.writeBody 写回，
 	 *   expectedHash 用刚读到的正文的 hash；返回 CONFLICT 时重新读一次再试一次，还冲突就抛 IOException
-	 * - 当天的收件箱是加密笔记 → IllegalStateException（服务端没有钥匙，不能往里追加）
+	 * - 当天的收件箱已经变成加密笔记（比如整理过、存成了带锁笔记）：服务端没有钥匙，不能往里追加，
+	 *   改记到当天的续篇 "yyyy-MM-dd-2.md"、"-3.md"……（最多 MAX_PARTS 篇，都加密了 → IllegalStateException）
 	 * - 当天的收件箱正文已达 MAX_CHARS → FullException，不追加
 	 * - 返回这篇收件箱笔记（追加后的 NoteSummary）
 	 */
@@ -62,7 +65,7 @@ public final class Inbox {
 
 	/**
 	 * 同上，记进 owner 的收件箱（owner 为 null = 本机房主的收件箱）。
-	 * 当天的文件已经存在、作者却不是 owner（比如管理员在别人的个人区里抢先建了同名文件）→ IllegalStateException，
+	 * 当天的文件已经存在、作者却不是 owner（比如管理员在别人的个人区里抢先建了同名文件）→ NotYoursException，
 	 * 不往里写：否则这个人记下的想法会落进别人能读的笔记里。
 	 */
 	public static NoteSummary append(Vault vault, UUID owner, OffsetDateTime now, String text) throws IOException {
@@ -70,56 +73,93 @@ public final class Inbox {
 		if (content.isEmpty()) {
 			throw new IllegalArgumentException("收集内容不能为空");
 		}
-		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
-		String path = pathFor(owner, now);
 		String time = now.format(DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT));
 		String tagged = "- " + time + " (" + label(now.getOffset()) + ") " + content + "\n";
 		String plain = "- " + time + " " + content + "\n";
+		// 新文件的第一条一定标注时区；之后和最近一条带标注的记录同一个时区就不标，换了时区（或一条标注都没有）才标
+		return appendLine(vault, owner, now, tagged, body -> now.getOffset().equals(lastOffset(body)) ? plain : tagged);
+	}
+
+	/**
+	 * 记一条客户端已经加密好的随手记（InboxCipher.seal 的结果，一行 "MPALBOX1:…"）。时刻和时区标注在密文里，
+	 * 服务端看不到内容，原样追加成一行。不是合法的密文行 → IllegalArgumentException。其余规则同 append。
+	 */
+	public static NoteSummary appendSealed(Vault vault, UUID owner, OffsetDateTime now, String sealedLine) throws IOException {
+		if (!InboxCipher.isSealed(sealedLine)) {
+			throw new IllegalArgumentException("不是收件箱密文");
+		}
+		String line = sealedLine.strip() + "\n";
+		return appendLine(vault, owner, now, line, body -> line);
+	}
+
+	/**
+	 * 一条要加密的随手记的明文："- HH:mm (UTC+8) 内容"（不带换行）。客户端加密前用它拼好这一行：
+	 * 服务端看不到内容，没法按文件里上一条的时区决定标不标，所以加密的每一条都带时区标注。
+	 * 换行换成空格、去掉首尾空白；处理后为空 → IllegalArgumentException。
+	 */
+	public static String entryLine(OffsetDateTime now, String text) {
+		String content = text == null ? "" : text.replace('\r', ' ').replace('\n', ' ').strip();
+		if (content.isEmpty()) {
+			throw new IllegalArgumentException("收集内容不能为空");
+		}
+		return "- " + now.format(DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)) + " (" + label(now.getOffset()) + ") " + content;
+	}
+
+	/** 当天的收件箱最多分成这么多篇（一篇被加密了就记到下一篇）。 */
+	public static final int MAX_PARTS = 10;
+
+	private static NoteSummary appendLine(Vault vault, UUID owner, OffsetDateTime now, String firstLine,
+			java.util.function.UnaryOperator<String> lineAfter) throws IOException {
+		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
 		synchronized (vault) {
-			for (int attempt = 0; attempt < 2; attempt++) {
-				// 同步外部编辑的路径和加密标记，重试时也重新检查。
-				vault.scan();
-				NoteSummary note = vault.resolve(path).orElse(null);
-				if (note == null) {
-					if (attempt > 0) {
+			// 同步外部编辑的路径和加密标记
+			vault.scan();
+			for (int part = 1; part <= MAX_PARTS; part++) {
+				String path = pathFor(owner, now, part);
+				for (int attempt = 0; attempt < 2; attempt++) {
+					NoteSummary note = vault.resolve(path).orElse(null);
+					if (note == null) {
+						if (attempt > 0) {
+							throw new IOException("收件箱笔记已不存在");
+						}
+						String title = "# " + FOLDER + " " + date + (part == 1 ? "" : " (" + part + ")");
+						return vault.createNote(path, title + "\n\n" + firstLine, owner);
+					}
+					if (!java.util.Objects.equals(note.access().owner(), owner)) {
+						throw new NotYoursException();
+					}
+					String body = note.encrypted() ? null : vault.readBody(note.id())
+							.orElseThrow(() -> new IOException("无法读取收件箱笔记"));
+					if (body == null || NoteCipher.isEncrypted(body) || NoteEnvelope.isEnvelope(body)) {
+						break; // 这一篇已经是加密笔记，记到下一篇
+					}
+					if (body.length() >= MAX_CHARS) {
+						throw new FullException();
+					}
+					String updated = body + (body.endsWith("\n") ? "" : "\n") + lineAfter.apply(body);
+					Vault.WriteResult result = vault.writeBody(note.id(), updated, Vault.hash(body));
+					if (result == Vault.WriteResult.OK) {
+						return vault.find(note.id()).orElseThrow(() -> new IOException("无法找到追加后的收件箱笔记"));
+					}
+					if (result == Vault.WriteResult.MISSING) {
 						throw new IOException("收件箱笔记已不存在");
 					}
-					// 新文件的第一条一定标注时区
-					return vault.createNote(path, "# " + FOLDER + " " + date + "\n\n" + tagged, owner);
-				}
-				if (!java.util.Objects.equals(note.access().owner(), owner)) {
-					throw new NotYoursException();
-				}
-				if (note.encrypted()) {
-					throw new IllegalStateException("不能向加密收件箱追加内容");
-				}
-				String body = vault.readBody(note.id())
-						.orElseThrow(() -> new IOException("无法读取收件箱笔记"));
-				if (NoteCipher.isEncrypted(body)) {
-					throw new IllegalStateException("不能向加密收件箱追加内容");
-				}
-				// 和最近一条带标注的记录同一个时区就不标，换了时区（或者文件里一条标注都没有）才标
-				if (body.length() >= MAX_CHARS) {
-					throw new FullException();
-				}
-				String line = now.getOffset().equals(lastOffset(body)) ? plain : tagged;
-				String updated = body + (body.endsWith("\n") ? "" : "\n") + line;
-				Vault.WriteResult result = vault.writeBody(note.id(), updated, Vault.hash(body));
-				if (result == Vault.WriteResult.OK) {
-					return vault.find(note.id()).orElseThrow(() -> new IOException("无法找到追加后的收件箱笔记"));
-				}
-				if (result == Vault.WriteResult.MISSING) {
-					throw new IOException("收件箱笔记已不存在");
+					vault.scan(); // 写入冲突：重新读一次再试
 				}
 			}
-			throw new IOException("收件箱笔记连续发生写入冲突");
+			throw new IllegalStateException("今天的收件箱都已加密，不能再追加");
 		}
 	}
 
 	/** owner 在 now 这一天的收件箱文件路径（owner 为 null = 本机房主）。 */
 	public static String pathFor(UUID owner, OffsetDateTime now) {
+		return pathFor(owner, now, 1);
+	}
+
+	/** 当天的第 part 篇：第 1 篇 "yyyy-MM-dd.md"，之后 "yyyy-MM-dd-2.md"…… */
+	public static String pathFor(UUID owner, OffsetDateTime now, int part) {
 		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
-		return folderFor(owner) + "/" + date + ".md";
+		return folderFor(owner) + "/" + date + (part == 1 ? "" : "-" + part) + ".md";
 	}
 
 	/** owner 的收件箱文件夹："收件箱" 或 "players/&lt;UUID&gt;/收件箱"。 */

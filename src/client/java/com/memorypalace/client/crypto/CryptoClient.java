@@ -2,6 +2,7 @@ package com.memorypalace.client.crypto;
 
 import com.memorypalace.client.EditorScreen;
 import com.memorypalace.client.NoteScreen;
+import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.MasterKey;
 import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.crypto.WrongKeyException;
@@ -88,6 +89,7 @@ public final class CryptoClient {
 			INCOMING.clear();
 			KNOWN_ENCRYPTED.clear();
 			decryptIntent = null;
+			InboxCapture.reset();
 			ClientKeys.disconnect();
 		}));
 	}
@@ -102,7 +104,8 @@ public final class CryptoClient {
 	public static void openEditor(EditPayloads.OpenEditor payload) {
 		boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
 		newNoteRequested = false;
-		if (!requested || KNOWN_ENCRYPTED.contains(payload.noteId()) || NoteCipher.isEncrypted(payload.body())) {
+		if (!requested || KNOWN_ENCRYPTED.contains(payload.noteId()) || NoteCipher.isEncrypted(payload.body())
+				|| InboxCipher.hasSealedLines(payload.body())) {
 			return;
 		}
 		Minecraft.getInstance().gui.setScreen(new EditorScreen(payload.noteId(), Component.literal(payload.title()), payload.body()));
@@ -154,11 +157,15 @@ public final class CryptoClient {
 		openNote(part.id(), Component.literal(part.title()), String.join("", in.parts()), part.refresh(), part.editable());
 	}
 
-	/** 正文收齐了：明文直接打开；密文先解锁再解密。 */
+	/**
+	 * 正文收齐了：明文直接打开；密文先解锁再解密。
+	 * 收件箱里有随手记密文行（MPALBOX1）的，也当作加密笔记：解锁后用收件箱私钥解开显示；
+	 * 在编辑器里整理、保存时整篇存成普通的加密笔记（绝不把解开的内容以明文存回去）。
+	 */
 	private static void openNote(UUID id, Component title, String stored, boolean refresh, boolean editable) {
 		Minecraft mc = Minecraft.getInstance();
 		String storedHash = Vault.hash(stored);
-		boolean encrypted = NoteCipher.isEncrypted(stored);
+		boolean encrypted = NoteCipher.isEncrypted(stored) || InboxCipher.hasSealedLines(stored);
 		if (!encrypted && KNOWN_ENCRYPTED.contains(id)) {
 			// 这篇刚才还是加密的，现在服务端发来明文：关掉、提醒，不默默当普通笔记打开
 			if (mc.gui.screen() instanceof NoteScreen open && id.equals(open.noteId())) {
@@ -192,13 +199,25 @@ public final class CryptoClient {
 		}
 		ClientKeys.requireUnlocked(null, () -> decrypt(id, stored).ifPresentOrElse(
 				plain -> {
-					rememberEncrypted(id); // 真的用自己的钥匙解开了，才算"已知的加密笔记"
+					// 真的用自己的钥匙解开了，才算"已知的加密笔记"。收件箱随手记不算：别人有公钥也能往里加密文行
+					if (NoteCipher.isEncrypted(stored)) {
+						rememberEncrypted(id);
+					}
 					mc.gui.setScreen(new NoteScreen(id, title, plain, true, storedHash, editable));
 				},
 				() -> mc.gui.setScreen(null)));
 	}
 
 	private static Optional<String> decrypt(UUID noteId, String stored) {
+		if (!NoteCipher.isEncrypted(stored)) {
+			// 收件箱随手记：用解锁时解出来的收件箱私钥
+			String plain = ClientKeys.openSealed(stored);
+			if (plain == null) {
+				PasswordScreen.tell("message.memorypalace.inbox_no_box");
+				return Optional.empty();
+			}
+			return Optional.of(plain);
+		}
 		try {
 			return Optional.of(NoteCipher.decrypt(ClientKeys.key(), noteId, stored));
 		} catch (WrongKeyException e) {

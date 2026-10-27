@@ -4,6 +4,7 @@ import javax.crypto.KDF;
 import javax.crypto.spec.HKDFParameterSpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
@@ -53,6 +54,9 @@ public final class KeyRing {
 	private static final Set<String> PASSWORD_FIELDS = Set.of("version", "kdf", "kdf.version",
 			"kdf.memoryKiB", "kdf.iterations", "kdf.parallelism", "kdf.length", "password.salt", "password.wrap");
 	private static final Set<String> RECOVERY_FIELDS = Set.of("recovery.kdf", "recovery.salt", "recovery.wrap");
+	// 收件箱钥匙（可选，两个字段一起出现）：box.public = 公钥（X.509，明文，随手记加密用，不需要密码）；
+	// box.wrap = 用主密钥派生的钥匙包好的私钥（PKCS#8），AAD 绑定公钥
+	private static final Set<String> BOX_FIELDS = Set.of("box.public", "box.wrap");
 
 	private KeyRing() {}
 
@@ -74,6 +78,7 @@ public final class KeyRing {
 			fields.put("version", "1");
 			setPassword(fields, secret, password);
 			String recovery = withRecovery ? setRecovery(fields, secret) : null;
+			setBox(fields, secret);
 			String content = serialize(fields);
 			key = new MasterKey(secret);
 			return new Created(content, key, recovery);
@@ -162,6 +167,77 @@ public final class KeyRing {
 			return serialize(fields);
 		} finally {
 			key.destroy();
+		}
+	}
+
+	// ---- 收件箱钥匙 ----
+
+	/** 钥匙圈里有没有收件箱钥匙。 */
+	public static boolean hasBox(String content) {
+		return parse(content).containsKey("box.public");
+	}
+
+	/** 收件箱公钥（不需要密码）；还没有时为 null。 */
+	public static byte[] boxPublic(String content) {
+		String value = parse(content).get("box.public");
+		return value == null ? null : decode(value, 44);
+	}
+
+	/**
+	 * 已有收件箱钥匙就原样返回；没有就生成一对，用 key 锁好私钥，返回新内容（旧钥匙圈第一次解锁后补上）。
+	 * key 必须是这个钥匙圈解锁出来的主密钥。
+	 */
+	public static String withBox(String content, MasterKey key) {
+		Map<String, String> fields = parse(content);
+		if (fields.containsKey("box.public")) {
+			return content;
+		}
+		byte[] secret = NoteCipher.copyKey(key);
+		try {
+			setBox(fields, secret);
+			return serialize(fields);
+		} finally {
+			NoteCipher.wipe(secret);
+		}
+	}
+
+	/** 解开收件箱私钥（PKCS#8，调用方用完清零）。没有收件箱钥匙、主密钥不对、被改过 → WrongKeyException。 */
+	public static byte[] boxPrivate(String content, MasterKey key) throws WrongKeyException {
+		Map<String, String> fields = parse(content);
+		if (!fields.containsKey("box.wrap")) {
+			throw NoteCipher.wrongKey();
+		}
+		byte[] secret = NoteCipher.copyKey(key);
+		byte[] wrappingKey = null;
+		try {
+			wrappingKey = boxWrappingKey(secret);
+			return NoteCipher.open(wrappingKey, aad(fields, "box"), decodeBetween(fields.get("box.wrap"), 60, 256));
+		} finally {
+			NoteCipher.wipe(secret);
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	private static void setBox(Map<String, String> fields, byte[] secret) {
+		InboxCipher.BoxKeys keys = InboxCipher.generate();
+		byte[] wrappingKey = null;
+		try {
+			fields.put("box.public", Base64.getEncoder().encodeToString(keys.publicKey()));
+			wrappingKey = boxWrappingKey(secret);
+			fields.put("box.wrap", Base64.getEncoder().encodeToString(
+					NoteCipher.seal(wrappingKey, aad(fields, "box"), keys.privateKey())));
+		} finally {
+			NoteCipher.wipe(keys.privateKey());
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	private static byte[] boxWrappingKey(byte[] secret) {
+		try {
+			return KDF.getInstance("HKDF-SHA256").deriveData(HKDFParameterSpec.ofExtract().addIKM(secret)
+					.thenExpand((DOMAIN + "box").getBytes(StandardCharsets.UTF_8), MasterKey.LENGTH));
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("无法执行 HKDF-SHA-256");
 		}
 	}
 
@@ -259,11 +335,14 @@ public final class KeyRing {
 
 	private static byte[] aad(Map<String, String> fields, String purpose) {
 		// 版本、用途和本包装的 KDF 元数据都受认证；两个包装互不依赖，允许独立轮换。
-		String metadata = purpose.equals("password")
-				? fields.get("kdf") + "|" + fields.get("kdf.version") + "|" + fields.get("kdf.memoryKiB")
-						+ "|" + fields.get("kdf.iterations") + "|" + fields.get("kdf.parallelism")
-						+ "|" + fields.get("kdf.length") + "|" + fields.get("password.salt")
-				: fields.get("recovery.kdf") + "|" + fields.get("recovery.salt");
+		String metadata = switch (purpose) {
+			case "password" -> fields.get("kdf") + "|" + fields.get("kdf.version") + "|" + fields.get("kdf.memoryKiB")
+					+ "|" + fields.get("kdf.iterations") + "|" + fields.get("kdf.parallelism")
+					+ "|" + fields.get("kdf.length") + "|" + fields.get("password.salt");
+			case "recovery" -> fields.get("recovery.kdf") + "|" + fields.get("recovery.salt");
+			// 私钥和公钥绑在一起：把公钥换掉，私钥就解不开了
+			default -> fields.get("box.public");
+		};
 		return (DOMAIN + purpose + "|" + metadata).getBytes(StandardCharsets.UTF_8);
 	}
 
@@ -282,7 +361,7 @@ public final class KeyRing {
 				throw invalidContent();
 			}
 			String name = line.substring(0, equals);
-			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name))
+			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name) && !BOX_FIELDS.contains(name))
 					|| fields.putIfAbsent(name, line.substring(equals + 1)) != null) {
 				throw invalidContent();
 			}
@@ -308,7 +387,31 @@ public final class KeyRing {
 			decode(fields.get("recovery.salt"), 16);
 			decode(fields.get("recovery.wrap"), 60);
 		}
+		if (BOX_FIELDS.stream().anyMatch(fields::containsKey)) {
+			if (!fields.keySet().containsAll(BOX_FIELDS)) {
+				throw invalidContent();
+			}
+			byte[] publicKey = decode(fields.get("box.public"), 44);
+			try {
+				InboxCipher.publicKey(publicKey);
+			} catch (IllegalArgumentException e) {
+				throw invalidContent();
+			}
+			decodeBetween(fields.get("box.wrap"), 60, 256);
+		}
 		return fields;
+	}
+
+	private static byte[] decodeBetween(String text, int min, int max) {
+		try {
+			byte[] bytes = Base64.getDecoder().decode(text);
+			if (bytes.length < min || bytes.length > max || !Base64.getEncoder().encodeToString(bytes).equals(text)) {
+				throw invalidContent();
+			}
+			return bytes;
+		} catch (IllegalArgumentException e) {
+			throw invalidContent();
+		}
 	}
 
 	private static int number(String text, int maximum) {

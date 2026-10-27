@@ -4,7 +4,11 @@ import com.memorypalace.client.EditorScreen;
 import com.memorypalace.client.book.BookScreen;
 import com.memorypalace.client.book.BookSettings;
 import com.memorypalace.client.render.RasterTextures;
+import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.crypto.InboxCipher;
+import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.crypto.MasterKey;
+import com.memorypalace.core.crypto.WrongKeyException;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.CryptoPayloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -13,6 +17,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +62,68 @@ public final class ClientKeys {
 		touch();
 	}
 
+	// ---- 收件箱钥匙（解锁时从钥匙圈里解出来，只在内存里，上锁时清零） ----
+
+	private static byte[] boxPublic;
+	private static byte[] boxPrivate;
+
+	/**
+	 * 用 keyring 解锁出了 newKey（输密码、设新密码、恢复）：设好主密钥，顺便解出收件箱私钥备用。
+	 * 旧钥匙圈还没有收件箱钥匙的：生成一对补进去并写回服务端，存好之后才开始用。
+	 */
+	public static void unlockedWith(String keyring, MasterKey newKey) {
+		setKey(newKey);
+		forgetBox();
+		try {
+			if (KeyRing.hasBox(keyring)) {
+				rememberBox(keyring, newKey);
+				return;
+			}
+			String withBox = KeyRing.withBox(keyring, newKey);
+			int gen = generation;
+			writeKeyring(withBox, keyring, ok -> {
+				if (ok && gen == generation && key == newKey) {
+					rememberBox(withBox, newKey);
+				}
+			});
+		} catch (RuntimeException e) {
+			MemoryPalace.LOGGER.warn("准备收件箱钥匙失败", e);
+		}
+	}
+
+	private static void rememberBox(String keyring, MasterKey master) {
+		try {
+			boxPublic = KeyRing.boxPublic(keyring);
+			boxPrivate = KeyRing.boxPrivate(keyring, master);
+		} catch (WrongKeyException | RuntimeException e) {
+			forgetBox();
+			MemoryPalace.LOGGER.warn("解不开收件箱私钥", e);
+		}
+	}
+
+	private static void forgetBox() {
+		if (boxPrivate != null) {
+			Arrays.fill(boxPrivate, (byte) 0);
+		}
+		boxPrivate = null;
+		boxPublic = null;
+	}
+
+	/** 有没有解出来的收件箱私钥（已解锁、钥匙圈里有收件箱钥匙）。 */
+	public static boolean hasBox() {
+		return unlocked() && boxPrivate != null;
+	}
+
+	/** 把正文里的收件箱密文行（MPALBOX1）解开；没有收件箱私钥时为 null。解不开的行换成提示。 */
+	public static String openSealed(String body) {
+		if (!hasBox()) {
+			return null;
+		}
+		touch();
+		return InboxCipher.openAll(boxPrivate, boxPublic, body,
+				Component.translatable("message.memorypalace.inbox_unreadable").getString());
+	}
+
 	/** 玩家在看/写加密笔记：推迟自动上锁。 */
 	public static void touch() {
 		lastUse = System.currentTimeMillis();
@@ -80,6 +147,7 @@ public final class ClientKeys {
 			key.destroy();
 			key = null;
 		}
+		forgetBox();
 		RasterTextures.clear();
 		BookScreen.clearMathFailures();
 		Screen screen = mc.gui.screen();

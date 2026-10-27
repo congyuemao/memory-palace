@@ -57,6 +57,7 @@ public final class BookSettings {
 	private static PageSize pageSize = PageSize.FIT;
 	private static FontSize fontSize = FontSize.NORMAL;
 	private static AutoLock autoLock = AutoLock.MIN_10;
+	private static boolean inboxEncryption = true;
 	private static boolean loaded;
 
 	private BookSettings() {}
@@ -74,6 +75,17 @@ public final class BookSettings {
 	public static AutoLock autoLock() {
 		load();
 		return autoLock;
+	}
+
+	/** 随手记要不要用收件箱公钥加密（钥匙圈里有收件箱钥匙时才生效）。默认开。 */
+	public static boolean inboxEncryption() {
+		load();
+		return inboxEncryption;
+	}
+
+	public static void setInboxEncryption(boolean value) {
+		inboxEncryption = value;
+		save();
 	}
 
 	public static void setAutoLock(AutoLock value) {
@@ -116,6 +128,7 @@ public final class BookSettings {
 			pageSize = parse(PageSize.class, p.getProperty("page_size"), PageSize.FIT);
 			fontSize = parse(FontSize.class, p.getProperty("font_size"), FontSize.NORMAL);
 			autoLock = parse(AutoLock.class, p.getProperty("auto_lock"), AutoLock.MIN_10);
+			inboxEncryption = !"false".equals(p.getProperty("inbox_encryption"));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.warn("读取设置失败，使用默认值", e);
 		}
@@ -134,6 +147,7 @@ public final class BookSettings {
 		p.setProperty("page_size", pageSize.name());
 		p.setProperty("font_size", fontSize.name());
 		p.setProperty("auto_lock", autoLock.name());
+		p.setProperty("inbox_encryption", Boolean.toString(inboxEncryption));
 		try (Writer w = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {
 			p.store(w, "Memory Palace settings");
 		} catch (IOException e) {

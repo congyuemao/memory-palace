@@ -92,7 +92,7 @@ public class PasswordScreen extends Screen {
 							Minecraft.getInstance().gui.setScreen(returnTo);
 							return;
 						}
-						ClientKeys.setKey(c.key());
+						ClientKeys.unlockedWith(c.content(), c.key());
 						Minecraft.getInstance().gui.setScreen(new RecoveryKeyScreen(c.recoveryKey(),
 								() -> {
 									wipe(password.get());
@@ -132,7 +132,7 @@ public class PasswordScreen extends Screen {
 					return null;
 				},
 				() -> {
-					ClientKeys.setKey(key.get());
+					ClientKeys.unlockedWith(keyring, key.get());
 					then.run();
 				},
 				() -> destroy(key.get()),
@@ -176,7 +176,7 @@ public class PasswordScreen extends Screen {
 							Minecraft.getInstance().gui.setScreen(returnTo);
 							return;
 						}
-						ClientKeys.setKey(key);
+						ClientKeys.unlockedWith(content.get(), key);
 						tell("message.memorypalace.password_changed");
 						then.run();
 					});
@@ -207,7 +207,7 @@ public class PasswordScreen extends Screen {
 				},
 				() -> {
 					try {
-						ClientKeys.setKey(key.get());
+						ClientKeys.unlockedWith(keyring, key.get());
 						onVerified.accept(password.get(), key.get());
 					} finally {
 						wipe(password.get());

@@ -1,13 +1,16 @@
 package com.memorypalace.client;
 
 import com.memorypalace.client.book.BookSettings;
+import com.memorypalace.client.crypto.BoxPins;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.PasswordScreen;
 import com.memorypalace.client.crypto.RecoveryKeyScreen;
+import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.KeyRing;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.controls.KeyBindsScreen;
 import net.minecraft.network.chat.CommonComponents;
@@ -15,14 +18,15 @@ import net.minecraft.network.chat.Component;
 
 /**
  * 记忆宫殿设置。从 Mod Menu（模组列表里的设置按钮）或"打开设置"快捷键进入。
- * 密码相关的按钮只有在世界里（单人游戏）才能用，因为钥匙圈存在当前世界的笔记库里。
+ * 密码相关的按钮只有在世界里才能用，因为钥匙圈存在当前世界（服务器）的笔记库里，每人一个。
  */
 public class SettingsScreen extends Screen {
 	private static final int COLUMN = 150;
 	private static final int GAP = 10;
 	private static final int ROW = 24;
-	// 标题 + 栏目名 + 4 行按钮 + "完成" + 提示信息 的总高度
-	private static final int CONTENT_HEIGHT = 16 + 14 + 4 * ROW + 20 + 20 + 16;
+	private static final int ROWS = 5;
+	// 标题 + 栏目名 + 5 行按钮 + "完成" + 提示信息 的总高度
+	private static final int CONTENT_HEIGHT = 16 + 14 + ROWS * ROW + 20 + 20 + 16;
 
 	private final Screen parent;
 	private Component message = Component.empty();
@@ -55,9 +59,13 @@ public class SettingsScreen extends Screen {
 			BookSettings.setAutoLock(BookSettings.next(BookSettings.autoLock()));
 			b.setMessage(autoLockLabel());
 		}).bounds(left, y + 2 * ROW, COLUMN, 20).build());
+		addRenderableWidget(Button.builder(inboxEncryptionLabel(), b -> {
+			BookSettings.setInboxEncryption(!BookSettings.inboxEncryption());
+			b.setMessage(inboxEncryptionLabel());
+		}).bounds(left, y + 3 * ROW, COLUMN, 20).build());
 
-		// 密码相关：都要先输入当前密码证明是本人
-		boolean inWorld = this.minecraft.player != null && this.minecraft.hasSingleplayerServer();
+		// 密码相关：都要先输入当前密码证明是本人。钥匙圈存在当前世界（服务器）上，每人一个，所以要在世界里才能用
+		boolean inWorld = this.minecraft.player != null;
 		Button change = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.change_password"),
 				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_change"), this,
@@ -109,10 +117,15 @@ public class SettingsScreen extends Screen {
 					this.minecraft.gui.setScreen(PasswordScreen.recover(keyring, this, () -> this.minecraft.gui.setScreen(this)));
 				}))
 				.bounds(right, y + 3 * ROW, COLUMN, 20).build());
+		// 信任新的收件箱公钥：并排显示记住的旧指纹和服务器上的新指纹，确认后才替换（只在别人的服务器上有用）
+		Button trust = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.trust_box"),
+				b -> withKeyring(this::confirmTrust))
+				.bounds(right, y + 4 * ROW, COLUMN, 20).build());
 		change.active = regen.active = remove.active = forgot.active = inWorld;
+		trust.active = inWorld && !this.minecraft.hasSingleplayerServer();
 
 		// 最下面一行：左边"修改按键"（打开原版按键设置页），右边"完成"
-		int bottom = y + 4 * ROW + 20;
+		int bottom = y + ROWS * ROW + 20;
 		addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.edit_keys"),
 				b -> this.minecraft.gui.setScreen(new KeyBindsScreen(this, this.minecraft.options)))
 				.bounds(left, bottom, COLUMN, 20).build());
@@ -137,6 +150,35 @@ public class SettingsScreen extends Screen {
 					.withColor(conflict ? 0xFF5555 : 0xC0C0C0));
 		}
 		return line;
+	}
+
+	private void confirmTrust(String keyring) {
+		byte[] publicKey;
+		try {
+			publicKey = KeyRing.boxPublic(keyring);
+		} catch (IllegalArgumentException e) {
+			publicKey = null;
+		}
+		if (publicKey == null) {
+			show("settings.memorypalace.trust_box_none");
+			return;
+		}
+		String fresh = InboxCipher.fingerprint(publicKey);
+		String pinned = BoxPins.pinned();
+		if (fresh.equals(pinned)) {
+			show("settings.memorypalace.trust_box_same");
+			return;
+		}
+		this.minecraft.gui.setScreen(new ConfirmScreen(yes -> {
+			if (yes) {
+				BoxPins.trust(fresh);
+			}
+			this.minecraft.gui.setScreen(this);
+			show(yes ? "settings.memorypalace.trust_box_done" : "settings.memorypalace.trust_box_kept");
+		}, Component.translatable("settings.memorypalace.trust_box_title"),
+				Component.translatable("settings.memorypalace.trust_box_message",
+						pinned == null ? Component.translatable("settings.memorypalace.trust_box_unknown") : Component.literal(pinned),
+						fresh)));
 	}
 
 	private static boolean hasRecovery(String keyring) {
@@ -182,6 +224,11 @@ public class SettingsScreen extends Screen {
 		return Component.translatable("settings.memorypalace.autolock", BookSettings.label(BookSettings.autoLock()));
 	}
 
+	private static Component inboxEncryptionLabel() {
+		return Component.translatable("settings.memorypalace.inbox_encryption", Component.translatable(
+				BookSettings.inboxEncryption() ? "settings.memorypalace.on" : "settings.memorypalace.off"));
+	}
+
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
@@ -193,8 +240,8 @@ public class SettingsScreen extends Screen {
 		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.password_section"),
 				this.width / 2 + GAP / 2 + COLUMN / 2, y - 12, 0xFFA0A0A0);
 		// 按键一览（冲突的标红），在两栏按钮下面、"修改按键/完成"上面
-		graphics.centeredText(this.font, keySummary(), this.width / 2, y + 4 * ROW + 6, 0xFFA0A0A0);
-		graphics.centeredText(this.font, message, this.width / 2, y + 4 * ROW + 46, 0xFFFFE080);
+		graphics.centeredText(this.font, keySummary(), this.width / 2, y + ROWS * ROW + 6, 0xFFA0A0A0);
+		graphics.centeredText(this.font, message, this.width / 2, y + ROWS * ROW + 46, 0xFFFFE080);
 	}
 
 	@Override

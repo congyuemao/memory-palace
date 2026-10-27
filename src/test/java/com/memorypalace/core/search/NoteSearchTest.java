@@ -69,6 +69,18 @@ class NoteSearchTest {
 	}
 
 	@Test
+	void sealedInboxLinesAreSkippedButPlainLinesStillMatch() throws IOException {
+		var box = com.memorypalace.core.crypto.InboxCipher.generate();
+		String sealed = com.memorypalace.core.crypto.InboxCipher.seal(box.publicKey(), "- 09:00 (UTC+8) 机密想法");
+		write("收件箱/2026-10-27.md", "# 收件箱 2026-10-27\n\n- 08:00 (UTC+8) 买牛奶\n" + sealed + "\n");
+		vault.scan();
+		assertEquals(List.of("收件箱/2026-10-27.md"), paths(NoteSearch.search(vault, "买牛奶", 10)), "明文的那条照样能搜到");
+		assertEquals(List.of(), NoteSearch.search(vault, "MPALBOX1", 10), "不拿密文去匹配");
+		String base64Piece = sealed.substring(20, 30);
+		assertEquals(List.of(), NoteSearch.search(vault, base64Piece, 10), "密文里的片段也搜不到");
+	}
+
+	@Test
 	void encryptedBodyIsNeverSearched() {
 		// "今天学了" 只在加密笔记的正文里
 		assertEquals(List.of(), NoteSearch.search(vault, "今天学了", 10));

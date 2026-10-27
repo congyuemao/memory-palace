@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -59,15 +60,20 @@ class CryptoTest {
 	@Test
 	void changePasswordKeepsKeyAndRecovery() throws Exception {
 		var created = KeyRing.create(pw("old-password"), true);
+		byte[] boxPublic = KeyRing.boxPublic(created.content());
+		String sealed = InboxCipher.seal(boxPublic, "改密码前的随手记");
 		String changed = KeyRing.changePassword(created.content(), created.key(), pw("new-password"));
 		assertThrows(WrongKeyException.class, () -> KeyRing.unlock(changed, pw("old-password")));
 		assertArrayEquals(created.key().bytes(), KeyRing.unlock(changed, pw("new-password")).bytes());
 		assertArrayEquals(created.key().bytes(), KeyRing.unlockWithRecovery(changed, created.recoveryKey()).bytes());
+		assertBoxOpens(changed, created.key(), boxPublic, sealed, "改密码前的随手记");
 	}
 
 	@Test
 	void regenerateAndRemoveRecoveryNeedPassword() throws Exception {
 		var created = KeyRing.create(pw("password1"), true);
+		byte[] boxPublic = KeyRing.boxPublic(created.content());
+		String sealed = InboxCipher.seal(boxPublic, "更换恢复密钥前的随手记");
 		assertThrows(WrongKeyException.class, () -> KeyRing.regenerateRecovery(created.content(), pw("nope-nope")));
 		assertThrows(WrongKeyException.class, () -> KeyRing.removeRecovery(created.content(), pw("nope-nope")));
 
@@ -76,10 +82,128 @@ class CryptoTest {
 		assertThrows(WrongKeyException.class, () -> KeyRing.unlockWithRecovery(regenerated.content(), created.recoveryKey()),
 				"旧恢复密钥要失效");
 		assertArrayEquals(created.key().bytes(), KeyRing.unlockWithRecovery(regenerated.content(), regenerated.recoveryKey()).bytes());
+		assertBoxOpens(regenerated.content(), regenerated.key(), boxPublic, sealed, "更换恢复密钥前的随手记");
 
 		String removed = KeyRing.removeRecovery(regenerated.content(), pw("password1"));
 		assertFalse(KeyRing.hasRecovery(removed));
 		assertArrayEquals(created.key().bytes(), KeyRing.unlock(removed, pw("password1")).bytes());
+		assertBoxOpens(removed, created.key(), boxPublic, sealed, "更换恢复密钥前的随手记");
+	}
+
+	@Test
+	void createdKeyRingIncludesABoxThatOpensSealedLines() throws Exception {
+		var created = KeyRing.create(pw("password1"), false);
+		try {
+			assertTrue(KeyRing.hasBox(created.content()));
+			byte[] publicKey = KeyRing.boxPublic(created.content());
+			assertNotNull(publicKey);
+			assertEquals(44, publicKey.length);
+			String sealed = InboxCipher.seal(publicKey, "收件箱里的秘密 😀");
+			assertBoxOpens(created.content(), created.key(), publicKey, sealed, "收件箱里的秘密 😀");
+		} finally {
+			created.key().destroy();
+		}
+	}
+
+	@Test
+	void boxPrivateRejectsADifferentMasterKey() {
+		var created = KeyRing.create(pw("password1"), false);
+		byte[] changed = created.key().bytes().clone();
+		changed[0] ^= 1;
+		MasterKey otherKey = new MasterKey(changed);
+		NoteCipher.wipe(changed);
+		try {
+			assertThrows(WrongKeyException.class, () -> KeyRing.boxPrivate(created.content(), otherKey));
+		} finally {
+			otherKey.destroy();
+			created.key().destroy();
+		}
+	}
+
+	@Test
+	void oldKeyRingWithoutBoxStillUnlocksAndCanBeUpgradedIdempotently() throws Exception {
+		var created = KeyRing.create(pw("password1"), false);
+		String legacy = withoutField(withoutField(created.content(), "box.public"), "box.wrap");
+		try {
+			assertFalse(KeyRing.hasBox(legacy));
+			assertNull(KeyRing.boxPublic(legacy));
+			MasterKey unlocked = KeyRing.unlock(legacy, pw("password1"));
+			try {
+				assertArrayEquals(created.key().bytes(), unlocked.bytes());
+				assertThrows(WrongKeyException.class, () -> KeyRing.boxPrivate(legacy, unlocked));
+				String upgraded = KeyRing.withBox(legacy, unlocked);
+				assertTrue(KeyRing.hasBox(upgraded));
+				byte[] publicKey = KeyRing.boxPublic(upgraded);
+				assertNotNull(publicKey);
+				assertEquals(44, publicKey.length);
+				String sealed = InboxCipher.seal(publicKey, "升级后的随手记");
+				MasterKey reopened = KeyRing.unlock(upgraded, pw("password1"));
+				try {
+					assertArrayEquals(unlocked.bytes(), reopened.bytes());
+					assertBoxOpens(upgraded, reopened, publicKey, sealed, "升级后的随手记");
+					assertEquals(upgraded, KeyRing.withBox(upgraded, reopened));
+				} finally {
+					reopened.destroy();
+				}
+			} finally {
+				unlocked.destroy();
+			}
+		} finally {
+			created.key().destroy();
+		}
+	}
+
+	@Test
+	void swappingBoxPublicKeyParsesButCannotUnwrapThePrivateKey() throws Exception {
+		var created = KeyRing.create(pw("password1"), false);
+		var other = KeyRing.create(pw("password2"), false);
+		try {
+			byte[] replacement = KeyRing.boxPublic(other.content());
+			String tampered = replaceBoxPublic(created.content(), replacement);
+			assertTrue(KeyRing.hasBox(tampered));
+			assertArrayEquals(replacement, KeyRing.boxPublic(tampered));
+			MasterKey unlocked = KeyRing.unlock(tampered, pw("password1"));
+			try {
+				assertArrayEquals(created.key().bytes(), unlocked.bytes());
+				// The master key is correct: the box must fail because its AAD binds the original public key.
+				assertThrows(WrongKeyException.class, () -> KeyRing.boxPrivate(tampered, unlocked));
+			} finally {
+				unlocked.destroy();
+			}
+		} finally {
+			created.key().destroy();
+			other.key().destroy();
+		}
+	}
+
+	@Test
+	void eitherMissingBoxFieldIsRejectedDuringParsingAndUnlock() {
+		var created = KeyRing.create(pw("password1"), false);
+		try {
+			for (String missing : new String[]{"box.public", "box.wrap"}) {
+				String incomplete = withoutField(created.content(), missing);
+				assertAll("missing " + missing,
+						() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.hasBox(incomplete)),
+						() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.boxPublic(incomplete)),
+						() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.unlock(incomplete, pw("password1"))));
+			}
+		} finally {
+			created.key().destroy();
+		}
+	}
+
+	@Test
+	void boxPublicMustBeAnX25519KeyEvenWithValidBase64AndTheRightLength() {
+		var created = KeyRing.create(pw("password1"), false);
+		try {
+			String tampered = replaceBoxPublic(created.content(), new byte[44]);
+			assertAll(
+					() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.hasBox(tampered)),
+					() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.boxPublic(tampered)),
+					() -> assertThrows(IllegalArgumentException.class, () -> KeyRing.unlock(tampered, pw("password1"))));
+		} finally {
+			created.key().destroy();
+		}
 	}
 
 	@Test
@@ -131,5 +255,28 @@ class CryptoTest {
 		key.destroy();
 		assertTrue(key.isDestroyed());
 		assertThrows(IllegalStateException.class, () -> NoteCipher.encrypt(key, NOTE, "x"));
+	}
+
+	private static void assertBoxOpens(String content, MasterKey key, byte[] publicKey, String sealed,
+			String plaintext) throws WrongKeyException {
+		assertTrue(KeyRing.hasBox(content));
+		assertArrayEquals(publicKey, KeyRing.boxPublic(content));
+		byte[] privateKey = KeyRing.boxPrivate(content, key);
+		try {
+			assertEquals(plaintext, InboxCipher.open(privateKey, publicKey, sealed));
+		} finally {
+			NoteCipher.wipe(privateKey);
+		}
+	}
+
+	private static String withoutField(String content, String name) {
+		return content.lines().filter(line -> !line.startsWith(name + "="))
+				.collect(Collectors.joining("\n", "", "\n"));
+	}
+
+	private static String replaceBoxPublic(String content, byte[] publicKey) {
+		return content.lines().map(line -> line.startsWith("box.public=")
+				? "box.public=" + Base64.getEncoder().encodeToString(publicKey) : line)
+				.collect(Collectors.joining("\n", "", "\n"));
 	}
 }
