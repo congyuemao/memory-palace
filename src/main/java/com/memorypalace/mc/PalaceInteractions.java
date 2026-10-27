@@ -86,8 +86,10 @@ public final class PalaceInteractions {
 				if (refreshBook(lectern.getBook(), id.get())) {
 					lectern.setChanged();
 				}
-				openNote(serverPlayer, id.get());
-				recordLocation(level, hit.getBlockPos(), NoteLocations.LECTERN_SLOT, id.get());
+				// 只有真打开了才记位置：读不了的人狂点书架，不该让服务端一遍遍重写位置文件
+				if (openNote(serverPlayer, id.get())) {
+					recordLocation(level, hit.getBlockPos(), NoteLocations.LECTERN_SLOT, id.get());
+				}
 				return InteractionResult.SUCCESS;
 			}
 
@@ -131,8 +133,9 @@ public final class PalaceInteractions {
 			if (refreshBook(shelfEntity.getItem(slot.getAsInt()), id.get())) {
 				shelfEntity.setChanged();
 			}
-			openNote(serverPlayer, id.get());
-			recordLocation(level, hit.getBlockPos(), slot.getAsInt(), id.get());
+			if (openNote(serverPlayer, id.get())) {
+				recordLocation(level, hit.getBlockPos(), slot.getAsInt(), id.get());
+			}
 			return InteractionResult.SUCCESS;
 		});
 	}
@@ -169,13 +172,13 @@ public final class PalaceInteractions {
 		level.gameEvent(player, GameEvent.BLOCK_CHANGE, pos);
 	}
 
-	public static void openNote(ServerPlayer player, UUID id) {
-		if (!PalaceAccess.check(player)) {
-			return;
-		}
+	/** @return 打开成功（读得了、发出去了） */
+	public static boolean openNote(ServerPlayer player, UUID id) {
 		if (sendNote(player, id, false)) {
 			NoteWatcher.watch(player, id);
+			return true;
 		}
+		return false;
 	}
 
 	/**
@@ -195,18 +198,26 @@ public final class PalaceInteractions {
 			Optional<Path> path = vault.pathOf(id);
 			if (path.isPresent() && Files.exists(path.get()) && Files.size(path.get()) > MAX_FILE_BYTES) {
 				if (!refresh) {
-					player.sendSystemMessage(Component.translatable("message.memorypalace.note_too_large", MAX_FILE_BYTES / 1024));
+					// 没权限的人不该知道"这篇很大"：说法和不存在一样
+					boolean readable = vault.find(id).filter(n -> PalaceAccess.canRead(player, n)).isPresent();
+					player.sendSystemMessage(readable
+							? Component.translatable("message.memorypalace.note_too_large", MAX_FILE_BYTES / 1024)
+							: Component.translatable("message.memorypalace.note_unavailable"));
 				}
 				return false;
 			}
-			Optional<String> body = vault.readBody(id);
-			Optional<NoteSummary> note = vault.find(id);
-			if (body.isEmpty() || note.isEmpty()) {
+			// 读文件和取权限是同一次（readNote 会按文件此刻的内容刷新权限）：外部刚改过 palace-read 也立刻生效。
+			// 热重载推送也走这里，所以被收回权限的人不会再收到新内容
+			Optional<Vault.Read> read = vault.readNote(id);
+			if (read.isEmpty() || !PalaceAccess.canRead(player, read.get().note())) {
+				// "不存在"和"没权限"说法一样：不透露有没有这篇、是不是别人的收件箱或带锁笔记
 				if (!refresh) {
-					player.sendSystemMessage(Component.translatable("message.memorypalace.note_missing"));
+					player.sendSystemMessage(Component.translatable("message.memorypalace.note_unavailable"));
 				}
 				return false;
 			}
+			Optional<NoteSummary> note = Optional.of(read.get().note());
+			Optional<String> body = Optional.of(read.get().body());
 			// 文件开头标着"已加密"，正文却不是密文（比如在外部编辑器里被改成了明文）：
 			// 不能当普通笔记打开，否则会绕过加密的所有保护
 			if (note.get().encrypted() != NoteCipher.isEncrypted(body.get())) {
@@ -216,7 +227,8 @@ public final class PalaceInteractions {
 				return false;
 			}
 			// 分块发送，客户端收齐再拼，正文一个字都不截
-			for (OpenNotePayload part : OpenNotePayload.split(id, note.get().title(), body.get(), refresh)) {
+			for (OpenNotePayload part : OpenNotePayload.split(id, note.get().title(), body.get(), refresh,
+					PalaceAccess.canEdit(player, note.get()))) {
 				ServerPlayNetworking.send(player, part);
 			}
 			return true;

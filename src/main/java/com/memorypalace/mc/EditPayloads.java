@@ -2,6 +2,7 @@ package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -97,12 +98,17 @@ public final class EditPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(SaveResult.TYPE, SaveResult.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(OpenEditor.TYPE, OpenEditor.CODEC);
 		ServerPlayNetworking.registerGlobalReceiver(SaveChunk.TYPE, (chunk, context) -> receive(context.player(), chunk));
-		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> PENDING.remove(handler.getPlayer().getUUID()));
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+			PENDING.remove(handler.getPlayer().getUUID());
+			SAVE_RATE.forget(handler.getPlayer().getUUID());
+		});
 	}
 
 	private static void receive(ServerPlayer player, SaveChunk chunk) {
-		// 只有本机房主能写笔记：笔记 ID 不是权限凭证，知道 ID 也不能覆盖别人的笔记
-		if (!PalaceAccess.allowed(player)) {
+		// 笔记 ID 不是权限凭证：知道 ID 也不能覆盖别人的笔记。每一块都查，没权限的连缓存都不留
+		Vault current = PalaceServer.vault();
+		if (current == null || current.find(chunk.noteId()).filter(note -> PalaceAccess.canEdit(player, note)).isEmpty()) {
+			PENDING.remove(player.getUUID());
 			reply(player, chunk, "DENIED", "");
 			return;
 		}
@@ -123,6 +129,11 @@ public final class EditPayloads {
 			}
 		}
 		PENDING.remove(player.getUUID());
+		// 保存限速：每人每秒 1 次、最多连着 10 次（手动保存远到不了），挡住刷保存包反复写盘
+		if (!SAVE_RATE.tryTake(player.getUUID())) {
+			reply(player, chunk, "BUSY", "");
+			return;
+		}
 		String body = String.join("", a.parts());
 
 		Vault vault = PalaceServer.vault();
@@ -142,14 +153,28 @@ public final class EditPayloads {
 			reply(player, chunk, "REFUSED", "");
 			return;
 		}
+		// 写入前按文件此刻的内容再判断一次：权限、加密状态都可能在收块期间被外部改了
+		// 加密状态只能这样变：
+		// - 密文 → 明文：只有"解除加密"，而且要本机房主
+		// - 明文 → 密文：只有本机房主加密自己是作者的笔记（钥匙圈是房主的；替别人加密，别人就再也打不开。
+		//   普通编辑者也不能靠伪造一段 MPAL1: 开头的正文把笔记"加密"、把其他编辑者挡在外面）
+		boolean host = CryptoPayloads.allowed(player);
+		boolean mayDecrypt = decrypt && host;
+		boolean bodyEncrypted = NoteCipher.isEncrypted(body);
+		NoteAccess.Who who = PalaceAccess.who(player);
 		try {
-			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body, guard.isEmpty() ? null : guard);
+			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body, guard.isEmpty() ? null : guard,
+					note -> note.canEdit(who) && (note.encrypted()
+							? bodyEncrypted || mayDecrypt
+							: !bodyEncrypted || host && NoteAccess.isOwner(note.access(), who)));
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);
 			reply(player, chunk, "ERROR", "");
 		}
 	}
+
+	private static final RateLimiter SAVE_RATE = new RateLimiter(1, 10);
 
 	private static void reply(ServerPlayer player, SaveChunk chunk, String result, String newHash) {
 		ServerPlayNetworking.send(player, new SaveResult(chunk.noteId(), chunk.session(), result, newHash));

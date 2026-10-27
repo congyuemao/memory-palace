@@ -4,6 +4,7 @@ import com.memorypalace.client.book.BookLayout;
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
 import com.memorypalace.client.crypto.ClientKeys;
+import com.memorypalace.client.crypto.CryptoClient;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.OpenNotePayload;
@@ -23,6 +24,7 @@ import java.util.UUID;
 public class NoteScreen extends BookScreen {
 	private String body;          // 明文（加密笔记已经解密）
 	private String storedHash;    // 文件里存的那份正文（加密笔记是密文）的指纹，编辑器保存时检查冲突用
+	private final boolean editable; // 服务端说这个人能改这篇：只决定显不显示编辑按钮，保存时服务端还会再检查
 	private List<List<BookLine>> pages = List.of();
 	private int spread; // 第几个"对开页"，0 = 第 1、2 页
 
@@ -36,13 +38,14 @@ public class NoteScreen extends BookScreen {
 	}
 
 	public NoteScreen(UUID noteId, Component title, String body) {
-		this(noteId, title, body, false, Vault.hash(body));
+		this(noteId, title, body, false, Vault.hash(body), false);
 	}
 
-	public NoteScreen(UUID noteId, Component title, String body, boolean encrypted, String storedHash) {
+	public NoteScreen(UUID noteId, Component title, String body, boolean encrypted, String storedHash, boolean editable) {
 		super(noteId, title, encrypted);
 		this.body = body;
 		this.storedHash = storedHash;
+		this.editable = editable;
 	}
 
 	/** 文件在外部被改了：换上新内容，尽量停在原来那一页。 */
@@ -67,10 +70,18 @@ public class NoteScreen extends BookScreen {
 		forwardButton = addRenderableWidget(new PageButton(rightTextX() + textWidth() - 23, buttonY, true, b -> flip(1), true));
 
 		// ✎ 进入游戏内编辑器；做成书脊下方的小按钮，不占阅读空间
-		if (noteId != null) {
+		if (noteId != null && editable) {
+			int y = Math.min(this.height - 21, top + pageH + 1);
 			addRenderableWidget(Button.builder(Component.literal("✎"), b -> openEditor())
-					.bounds(spineX() - 10, Math.min(this.height - 21, top + pageH + 1), 20, 20)
+					.bounds(spineX() - 10, y, 20, 20)
 					.tooltip(Tooltip.create(Component.translatable("screen.memorypalace.edit"))).build());
+			// 解除加密只能从"正打开着的这篇"发起：客户端记下这份密文的指纹，服务端发回的必须是同一份
+			if (encrypted) {
+				addRenderableWidget(Button.builder(Component.translatable("screen.memorypalace.decrypt_short"),
+								b -> CryptoClient.requestDecrypt(noteId, storedHash))
+						.bounds(spineX() + 14, y, 40, 20)
+						.tooltip(Tooltip.create(Component.translatable("screen.memorypalace.decrypt_tooltip"))).build());
+			}
 		}
 		updateButtons();
 	}

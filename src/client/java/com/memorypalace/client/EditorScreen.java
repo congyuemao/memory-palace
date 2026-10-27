@@ -195,6 +195,7 @@ public class EditorScreen extends BookScreen {
 				}
 			}
 			case "REFUSED" -> status = Component.translatable("screen.memorypalace.save_refused");
+			case "DENIED" -> status = Component.translatable("screen.memorypalace.save_denied");
 			case "CONFLICT" -> this.minecraft.gui.setScreen(new ConfirmScreen(overwrite -> {
 						this.minecraft.gui.setScreen(this);
 						if (overwrite) {
@@ -208,6 +209,7 @@ public class EditorScreen extends BookScreen {
 					Component.translatable("screen.memorypalace.conflict_overwrite"),
 					Component.translatable("screen.memorypalace.conflict_cancel")));
 			case "MISSING" -> status = Component.translatable("screen.memorypalace.save_missing");
+			case "BUSY" -> status = Component.translatable("screen.memorypalace.save_busy");
 			default -> status = Component.translatable("screen.memorypalace.save_failed");
 		}
 	}
@@ -241,7 +243,7 @@ public class EditorScreen extends BookScreen {
 
 	private void backToReading() {
 		ClientKeys.clearActiveEditor(this);
-		this.minecraft.gui.setScreen(new NoteScreen(noteId, this.title, savedBody, encrypted, baseHash));
+		this.minecraft.gui.setScreen(new NoteScreen(noteId, this.title, savedBody, encrypted, baseHash, true));
 	}
 
 	@Override

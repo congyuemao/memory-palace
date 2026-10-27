@@ -56,6 +56,10 @@ public final class NoteImageStore {
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(ImagePayloads.Data.TYPE, (payload, context) -> {
 			String key = key(payload.noteId(), payload.src());
+			// 只收自己正在等的图：服务端主动塞过来的一律不解码
+			if (STATES.get(key) != State.LOADING) {
+				return;
+			}
 			var raster = payload.png().length == 0 ? null : NoteImages.fromBytes(payload.png()).orElse(null);
 			if (raster == null) {
 				STATES.put(key, State.FAILED);

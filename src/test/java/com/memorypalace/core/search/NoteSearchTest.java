@@ -83,6 +83,15 @@ class NoteSearchTest {
 	}
 
 	@Test
+	void filterHidesUnreadableNotesEntirely() {
+		// 读不了的笔记：标题、路径、正文都不该命中，也不该被读（这里用"正文里才有的词"验证）
+		var hits = NoteSearch.search(vault, "特征值", 10, note -> !note.relativePath().startsWith("线性代数/"));
+		assertEquals(List.of("日记/特征值日记.md"), paths(hits));
+		assertEquals(List.of(), NoteSearch.search(vault, "SVD", 10, note -> !note.relativePath().contains("奇异值")));
+		assertEquals(List.of("线性代数/奇异值分解.md"), paths(NoteSearch.search(vault, "SVD", 10, note -> true)));
+	}
+
+	@Test
 	void snippetIsShortSingleLine() throws IOException {
 		write("长文.md", "# 长文\n" + "前".repeat(100) + "关键词" + "后".repeat(100) + "\n第二行");
 		vault.scan();

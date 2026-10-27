@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
 
 /**
  * 找笔记：按关键词搜标题、路径和正文。
@@ -35,6 +36,11 @@ public final class NoteSearch {
 	 * - query 为 null、空或全是空白 → 空列表
 	 */
 	public static List<Hit> search(Vault vault, String query, int limit) {
+		return search(vault, query, limit, note -> true);
+	}
+
+	/** 同上，但只在 visible 放行的笔记里搜：看不了的笔记连标题、路径都不比对，正文也不读。 */
+	public static List<Hit> search(Vault vault, String query, int limit, Predicate<NoteSummary> visible) {
 		if (query == null || query.isBlank() || limit <= 0) {
 			return List.of();
 		}
@@ -42,6 +48,9 @@ public final class NoteSearch {
 		String[] terms = normalized.split("\\p{javaWhitespace}+");
 		List<Hit> hits = new ArrayList<>();
 		for (NoteSummary note : vault.list()) {
+			if (!visible.test(note)) {
+				continue;
+			}
 			String title = note.title().toLowerCase(Locale.ROOT);
 			String path = note.relativePath().toLowerCase(Locale.ROOT);
 			String body = null;

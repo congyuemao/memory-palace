@@ -86,8 +86,10 @@ public final class Vault {
 		files.sort(Comparator.comparing(this::relativePath));
 		Map<UUID, NoteSummary> newIndex = new HashMap<>();
 		List<NoteSummary> newNotes = new ArrayList<>();
+		Map<UUID, Long> newModified = new HashMap<>();
 		for (Path file : files) {
 			String text;
+			long mtime = modifiedTime(file);
 			try {
 				text = Files.readString(file, StandardCharsets.UTF_8);
 			} catch (IOException e) {
@@ -112,18 +114,132 @@ public final class Vault {
 					continue;
 				}
 			}
-			String name = file.getFileName().toString();
-			// 标记存在即隐藏正文标题，即使文件内容不一致也不能泄露标题。
-			String title = encrypted ? name.substring(0, name.length() - 3) : parsed.body().lines()
-					.filter(line -> line.startsWith("# "))
-					.map(line -> line.substring(2).strip())
-					.findFirst().orElse(name.substring(0, name.length() - 3));
-			NoteSummary note = new NoteSummary(id, relativePath(file), title, encrypted);
+			NoteSummary note = summarize(id, relativePath(file), parsed);
 			newIndex.put(id, note);
+			newModified.put(id, mtime);
 			newNotes.add(note);
 		}
 		index = Map.copyOf(newIndex);
 		notes = List.copyOf(newNotes);
+		modified = Map.copyOf(newModified);
+	}
+
+	/** 从解析好的文件内容做一张目录卡片（scan 和 readNote 共用，保证两边算法一样）。 */
+	private static NoteSummary summarize(UUID id, String relativePath, FrontMatter.Parsed parsed) {
+		boolean encrypted = parsed.fields().containsKey("palace-encrypted") || NoteCipher.isEncrypted(parsed.body());
+		String name = relativePath.substring(relativePath.lastIndexOf('/') + 1);
+		// 标记存在即隐藏正文标题，即使文件内容不一致也不能泄露标题。
+		String title = encrypted ? name.substring(0, name.length() - 3) : parsed.body().lines()
+				.filter(line -> line.startsWith("# "))
+				.map(line -> line.substring(2).strip())
+				.findFirst().orElse(name.substring(0, name.length() - 3));
+		return new NoteSummary(id, relativePath, title, encrypted, NoteAccess.parse(parsed.fields()));
+	}
+
+	/** 只更新索引里的一篇（文件刚读过，权限、标题、加密状态以文件为准）。mtime 是读的那一刻文件的修改时间。 */
+	private void updateIndex(NoteSummary fresh, long mtime) {
+		Map<UUID, Long> newModified = new HashMap<>(modified);
+		newModified.put(fresh.id(), mtime);
+		modified = Map.copyOf(newModified);
+		if (fresh.equals(index.get(fresh.id()))) {
+			return;
+		}
+		Map<UUID, NoteSummary> newIndex = new HashMap<>(index);
+		newIndex.put(fresh.id(), fresh);
+		index = Map.copyOf(newIndex);
+		notes = notes.stream().map(n -> n.id().equals(fresh.id()) ? fresh : n).toList();
+	}
+
+	/**
+	 * 找不到文件时要不要重新扫描：只为"认识的 ID"扫（文件在外部改了名，靠扫描按 ID 找回来；
+	 * 找不回来的会从索引里去掉，之后就不认识了，不会反复扫）。
+	 * 不认识的 ID 一律不扫：ID 是客户端随便发的，不能让随机 ID 把全库读盘刷成拒绝服务。
+	 * 在外部新放进来的笔记要等管理员 /palace rescan（或重进世界）才认识。
+	 */
+	private boolean mayRescanFor(UUID id) {
+		return index.containsKey(id);
+	}
+
+	// 每篇笔记文件上次读到时的修改时间：refreshChanged 用它发现"在外部被改过"的文件
+	private Map<UUID, Long> modified = Map.of();
+
+	private static long modifiedTime(Path file) {
+		try {
+			return Files.getLastModifiedTime(file).toMillis();
+		} catch (IOException e) {
+			return -1;
+		}
+	}
+
+	/**
+	 * 重新读一遍"修改时间变了"的笔记，更新它们的目录卡片（权限、标题、加密状态）。
+	 * 只查文件属性，没变的不读内容，可以定时调用（服务端每隔几秒在后台调一次），
+	 * 这样在外部改了 palace-read / palace-edit 之后，搜索、准星书名、列表等也很快按新权限来。
+	 * 有文件不见了（被删、被改名）就整库重扫一次：按 ID 找回改了名的，删掉的从索引里去掉，
+	 * 不让旧卡片（标题、路径、权限）一直留着。
+	 */
+	public synchronized void refreshChanged() throws IOException {
+		boolean missing = false;
+		for (NoteSummary note : notes) {
+			Path file = root.resolve(note.relativePath());
+			long now = modifiedTime(file);
+			Long seen = modified.get(note.id());
+			if (now < 0) {
+				missing = true;
+				continue;
+			}
+			if (seen != null && seen == now) {
+				continue;
+			}
+			try {
+				FrontMatter.Parsed parsed = FrontMatter.parse(Files.readString(file, StandardCharsets.UTF_8));
+				if (note.id().equals(parsed.id())) {
+					updateIndex(summarize(note.id(), note.relativePath(), parsed), now);
+				}
+			} catch (IOException e) {
+				// 读不了就先保留旧卡片，下次再试
+			}
+		}
+		if (missing) {
+			scan();
+		}
+	}
+
+	/** 一篇笔记的最新目录卡片和正文：同一次读文件得到，权限以这一刻的文件为准。 */
+	public record Read(NoteSummary note, String body) {}
+
+	/**
+	 * 读一篇笔记，同时刷新它在索引里的目录卡片（权限、标题、加密状态可能在外部被改了）。
+	 * 调用方应该用返回的 note 做权限检查，而不是之前 find() 拿到的旧卡片。
+	 * 文件在扫描后被删掉了 → empty；改了名但 ID 没变 → 自动重新扫描一次再找。
+	 */
+	public synchronized Optional<Read> readNote(UUID id) throws IOException {
+		if (id == null) {
+			return Optional.empty();
+		}
+		for (int attempt = 0; attempt < 2; attempt++) {
+			NoteSummary note = index.get(id);
+			if (note != null) {
+				try {
+					Path file = root.resolve(note.relativePath());
+					long mtime = modifiedTime(file);
+					FrontMatter.Parsed parsed = FrontMatter.parse(Files.readString(file, StandardCharsets.UTF_8));
+					if (id.equals(parsed.id())) {
+						NoteSummary fresh = summarize(id, note.relativePath(), parsed);
+						updateIndex(fresh, mtime);
+						return Optional.of(new Read(fresh, parsed.body()));
+					}
+				} catch (NoSuchFileException e) {
+					// 旧路径消失后重新扫描一次，以 ID 追踪改名后的文件。
+				}
+			}
+			if (attempt == 0 && mayRescanFor(id)) {
+				scan();
+			} else {
+				break;
+			}
+		}
+		return Optional.empty();
 	}
 
 	/** 所有笔记，按 relativePath 字典序排序。 */
@@ -199,27 +315,7 @@ public final class Vault {
 	 * 文件在扫描后改了名但 ID 没变 → 自动重新 scan() 一次再找。
 	 */
 	public synchronized Optional<String> readBody(UUID id) throws IOException {
-		if (id == null) {
-			return Optional.empty();
-		}
-		for (int attempt = 0; attempt < 2; attempt++) {
-			NoteSummary note = index.get(id);
-			if (note != null) {
-				try {
-					FrontMatter.Parsed parsed = FrontMatter.parse(
-							Files.readString(root.resolve(note.relativePath()), StandardCharsets.UTF_8));
-					if (id.equals(parsed.id())) {
-						return Optional.of(parsed.body());
-					}
-				} catch (NoSuchFileException e) {
-					// 旧路径消失后重新扫描一次，以 ID 追踪改名后的文件。
-				}
-			}
-			if (attempt == 0) {
-				scan();
-			}
-		}
-		return Optional.empty();
+		return readNote(id).map(Read::body);
 	}
 
 	/** 笔记文件的绝对路径（给"用外部编辑器打开"按钮用）。 */
@@ -234,7 +330,9 @@ public final class Vault {
 		/** 文件在打开编辑器之后被别人（外部编辑器）改过，没有写入。 */
 		CONFLICT,
 		/** 找不到这篇笔记（被删了）。 */
-		MISSING
+		MISSING,
+		/** 按文件里此刻的权限，这个人不能改（见带 allowed 参数的 writeBody）。 */
+		DENIED
 	}
 
 	/**
@@ -262,6 +360,15 @@ public final class Vault {
 	 * - 找不到笔记 / 文件已被删 → MISSING（会先像 readBody 那样重新扫描一次再判断）
 	 */
 	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash) throws IOException {
+		return writeBody(id, newBody, expectedHash, note -> true);
+	}
+
+	/**
+	 * 同上，但写之前先用"刚读出来的文件"做一张目录卡片交给 allowed 判断：不放行 → DENIED，不写。
+	 * 读文件、判断权限、写文件在同一把锁里，权限以写入这一刻的文件为准（外部刚改过 palace-edit 也算数）。
+	 */
+	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash,
+			java.util.function.Predicate<NoteSummary> allowed) throws IOException {
 		if (id == null) {
 			return WriteResult.MISSING;
 		}
@@ -278,6 +385,11 @@ public final class Vault {
 				if (text != null) {
 					FrontMatter.Parsed parsed = FrontMatter.parse(text);
 					if (id.equals(parsed.id())) {
+						NoteSummary fresh = summarize(id, note.relativePath(), parsed);
+						updateIndex(fresh, modifiedTime(file));
+						if (!allowed.test(fresh)) {
+							return WriteResult.DENIED;
+						}
 						if (expectedHash != null && !MessageDigest.isEqual(hash(parsed.body()).getBytes(StandardCharsets.UTF_8),
 								expectedHash.getBytes(StandardCharsets.UTF_8))) {
 							return WriteResult.CONFLICT;
@@ -291,14 +403,21 @@ public final class Vault {
 						if (!body.isEmpty() && !frontMatter.endsWith("\n")) {
 							frontMatter += newline;
 						}
-						writeAtomically(file, frontMatter + body);
-						scan();
+						String written = frontMatter + body;
+						// 内容一个字都没变：不写文件（也就不触发外部编辑器、热重载、备份那一串）
+						if (!written.equals(text.startsWith("﻿") ? text.substring(1) : text)) {
+							writeAtomically(file, written);
+						}
+						// 只更新这一篇的卡片，不整库重扫：保存可能很频繁，整库扫描会被刷成拒绝服务
+						updateIndex(summarize(id, note.relativePath(), FrontMatter.parse(written)), modifiedTime(file));
 						return WriteResult.OK;
 					}
 				}
 			}
-			if (attempt == 0) {
+			if (attempt == 0 && mayRescanFor(id)) {
 				scan();
+			} else {
+				break;
 			}
 		}
 		return WriteResult.MISSING;

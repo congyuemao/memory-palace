@@ -73,14 +73,24 @@ public final class NoteLocations {
 		}
 	}
 
+	private static final long RECORD_AGAIN_AFTER_MS = 60_000;
+
 	/**
-	 * 记录"在 location 看到了笔记 noteId"。同一个地方已有记录就更新时间，不重复添加。
+	 * 记录"在 location 看到了笔记 noteId"。同一个地方已有记录就更新时间，不重复添加
+	 * （同一篇、同一个地方一分钟内再记，什么都不做：时间只是给"5 分钟前"这种显示用，不必每点一下就重写文件）。
 	 * 同一个地方（同维度同坐标同格子）只能属于一篇笔记：如果之前记录的是别的笔记，把那条去掉。
 	 * 立刻保存到文件（原子写：临时文件 + move）。
 	 */
 	public synchronized void record(UUID noteId, Location location) throws IOException {
 		Objects.requireNonNull(noteId);
 		validate(location);
+		// 同一篇在同一个位置、一分钟内刚记过：只是又点了一下，不用整个文件重写一遍
+		boolean fresh = entries.stream().anyMatch(entry -> entry.noteId().equals(noteId)
+				&& entry.location().samePlace(location)
+				&& Math.abs(location.seenAt() - entry.location().seenAt()) < RECORD_AGAIN_AFTER_MS);
+		if (fresh) {
+			return;
+		}
 		List<Entry> updated = new ArrayList<>(entries);
 		updated.removeIf(entry -> entry.location().samePlace(location));
 		updated.add(new Entry(noteId, location));

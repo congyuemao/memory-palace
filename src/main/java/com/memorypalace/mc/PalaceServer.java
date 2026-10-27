@@ -1,6 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.core.vault.VaultBackup;
@@ -12,7 +13,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Clock;
+import java.util.Properties;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 管理"当前世界"的笔记库：世界开启时打开 saves/&lt;世界&gt;/memory-palace/，关闭时释放。
@@ -24,6 +30,10 @@ public final class PalaceServer {
 
 	private static volatile Vault vault;
 	private static volatile NoteLocations locations;
+	private static volatile NoteAccess.Visibility visibility = NoteAccess.Visibility.EVERYONE;
+	// 每 2 秒在后台看一眼哪些笔记文件在外部被改过，按文件刷新权限（见 Vault.refreshChanged）
+	private static final long REFRESH_EVERY_MS = 2_000;
+	private static volatile ScheduledExecutorService refresher;
 
 	private PalaceServer() {}
 
@@ -35,18 +45,96 @@ public final class PalaceServer {
 				Vault v = new Vault(root);
 				writeWelcomeNoteIfEmpty(root);
 				v.scan();
+				visibility = loadVisibility(root);
 				vault = v;
 				locations = new NoteLocations(root.resolve(".palace").resolve("locations.tsv"));
 				MemoryPalace.LOGGER.info("笔记库已打开：{}（{} 篇笔记）", v.root(), v.list().size());
+				startRefresher(v);
 				backupInBackground(root, worldDir.getFileName().toString());
 			} catch (IOException e) {
 				MemoryPalace.LOGGER.error("无法打开笔记库 {}", root, e);
 			}
 		});
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			ScheduledExecutorService r = refresher;
+			if (r != null) {
+				r.shutdownNow();
+				refresher = null;
+			}
 			vault = null;
 			locations = null;
+			visibility = NoteAccess.Visibility.EVERYONE;
 		});
+	}
+
+	private static void startRefresher(Vault v) {
+		ScheduledExecutorService r = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform()
+				.name("memorypalace-refresh").daemon(true).factory());
+		r.scheduleWithFixedDelay(() -> {
+			try {
+				v.refreshChanged();
+			} catch (IOException | RuntimeException e) {
+				MemoryPalace.LOGGER.warn("刷新笔记索引失败", e);
+			}
+		}, REFRESH_EVERY_MS, REFRESH_EVERY_MS, TimeUnit.MILLISECONDS);
+		refresher = r;
+	}
+
+	/** 世界设置"笔记可见性"：没写 palace-read 的笔记谁能读。存在 .palace/settings.properties。 */
+	public static NoteAccess.Visibility visibility() {
+		return visibility;
+	}
+
+	public static void setVisibility(NoteAccess.Visibility value) throws IOException {
+		Vault v = vault;
+		if (v == null) {
+			throw new IOException("no vault");
+		}
+		Path file = settingsFile(v.root());
+		Properties props = new Properties();
+		if (Files.exists(file)) {
+			try (var in = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+				props.load(in);
+			}
+		}
+		props.setProperty(VISIBILITY_KEY, value.id());
+		Files.createDirectories(file.getParent());
+		Path tmp = Files.createTempFile(file.getParent(), ".palace-", ".tmp");
+		try {
+			try (var out = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
+				props.store(out, "Memory Palace world settings");
+			}
+			try {
+				Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			} catch (IOException e) {
+				Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+			}
+		} finally {
+			Files.deleteIfExists(tmp);
+		}
+		visibility = value;
+	}
+
+	private static final String VISIBILITY_KEY = "visibility";
+
+	private static Path settingsFile(Path root) {
+		return root.resolve(".palace").resolve("settings.properties");
+	}
+
+	// 读不出来就用默认值"所有人可读"，并记一条日志
+	private static NoteAccess.Visibility loadVisibility(Path root) {
+		Path file = settingsFile(root);
+		if (!Files.exists(file)) {
+			return NoteAccess.Visibility.EVERYONE;
+		}
+		Properties props = new Properties();
+		try (var in = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+			props.load(in);
+		} catch (IOException | IllegalArgumentException e) {
+			MemoryPalace.LOGGER.warn("读取世界设置失败，笔记可见性按默认（所有人可读）", e);
+			return NoteAccess.Visibility.EVERYONE;
+		}
+		return NoteAccess.Visibility.parse(props.getProperty(VISIBILITY_KEY));
 	}
 
 	/** 当前世界的笔记库；世界没开或打开失败时为 null。 */

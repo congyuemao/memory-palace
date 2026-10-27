@@ -21,6 +21,9 @@ import java.util.Optional;
 import java.util.Set;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReadParam;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 
 /**
  * 笔记里引用的本地图片：找文件、解码、缩小、编码成 PNG（用来通过网络发给客户端）。
@@ -122,7 +125,11 @@ public final class NoteImages {
 			if (maxDim <= 0) {
 				return Optional.empty();
 			}
-			BufferedImage image = ImageIO.read(file.toFile());
+			BufferedImage image;
+			try (ImageInputStream in = ImageIO.createImageInputStream(file.toFile())) {
+				// 大照片先隔行隔列抽样读进来（解码出来最长边不超过 4 倍 maxDim），再精细缩小：不会为一张巨图整张分配内存
+				image = in == null ? null : decode(in, Integer.MAX_VALUE, Math.max(1, maxDim) * 4);
+			}
 			if (image == null) {
 				return Optional.empty();
 			}
@@ -164,13 +171,49 @@ public final class NoteImages {
 		}
 	}
 
-	/** PNG（或 jpg 等 ImageIO 能读的）字节 → 位图；失败 → empty，不抛异常。 */
+	/** 网络收到的图最多这么大（服务端发的都缩到 1024 以内，这里留余量）。 */
+	public static final int MAX_RECEIVED_SIDE = 4096;
+	public static final long MAX_RECEIVED_PIXELS = 16L * 1024 * 1024;
+
+	/**
+	 * PNG（或 jpg 等 ImageIO 能读的）字节 → 位图；失败 → empty，不抛异常。
+	 * 字节来自网络（服务端可能不怀好意）：先只读文件头里的宽高，超过 MAX_RECEIVED_SIDE / MAX_RECEIVED_PIXELS 直接拒绝，
+	 * 免得一个高度压缩的"巨图"包在解码时把内存撑爆（OutOfMemoryError 是接不住的）。
+	 */
 	public static Optional<Raster> fromBytes(byte[] data) {
-		try (var input = new ByteArrayInputStream(data)) {
-			BufferedImage image = ImageIO.read(input);
+		try (ImageInputStream in = ImageIO.createImageInputStream(new ByteArrayInputStream(data))) {
+			BufferedImage image = in == null ? null : decode(in, MAX_RECEIVED_PIXELS, MAX_RECEIVED_SIDE);
 			return image == null ? Optional.empty() : Optional.of(toRaster(image));
 		} catch (Exception ignored) {
 			return Optional.empty();
+		}
+	}
+
+	/**
+	 * 解码第一帧，解码前先看宽高：总像素超过 maxPixels → null（拒绝）；
+	 * 最长边超过 maxSide → 隔行隔列抽样读，让读出来的最长边不超过 maxSide。
+	 */
+	private static BufferedImage decode(ImageInputStream in, long maxPixels, int maxSide) throws IOException {
+		var readers = ImageIO.getImageReaders(in);
+		if (!readers.hasNext()) {
+			return null;
+		}
+		ImageReader reader = readers.next();
+		try {
+			reader.setInput(in, true, true);
+			int width = reader.getWidth(0);
+			int height = reader.getHeight(0);
+			if (width <= 0 || height <= 0 || (long) width * height > maxPixels) {
+				return null;
+			}
+			ImageReadParam param = reader.getDefaultReadParam();
+			int step = (Math.max(width, height) + maxSide - 1) / maxSide;
+			if (step > 1) {
+				param.setSourceSubsampling(step, step, 0, 0);
+			}
+			return reader.read(0, param);
+		} finally {
+			reader.dispose();
 		}
 	}
 

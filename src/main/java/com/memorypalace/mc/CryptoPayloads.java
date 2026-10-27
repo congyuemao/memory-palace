@@ -1,11 +1,14 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -18,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -32,11 +36,26 @@ public final class CryptoPayloads {
 	private CryptoPayloads() {}
 
 	/**
-	 * 只有本机房主能动钥匙圈、加密解密：钥匙圈现在是整个笔记库共用一个。
-	 * 专用服务器、开放到局域网的世界都不行（访客也能发消息，不能让他们覆盖钥匙圈）。
+	 * 只有本机房主能动钥匙圈、加密解密：钥匙圈现在是整个笔记库共用一个（每人一个钥匙圈是以后的事）。
+	 * 开放到局域网时房主照常能用，访客不行（访客也能发消息，不能让他们读走或覆盖钥匙圈）；专用服务器上没有房主，谁都不行。
 	 */
 	public static boolean allowed(ServerPlayer player) {
-		return PalaceAccess.allowed(player);
+		return PalaceAccess.isHost(player);
+	}
+
+	/**
+	 * 客户端 → 服务端：我要解除这篇的加密（玩家在打开着的加密笔记上点了 🔓）。
+	 * 服务端回一个 Action("decrypt")，带上它存着的密文；客户端只接受和自己刚打开的那份密文一致的回复。
+	 */
+	public record DecryptRequest(UUID noteId) implements CustomPacketPayload {
+		public static final Type<DecryptRequest> TYPE = new Type<>(MemoryPalace.id("decrypt_request"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, DecryptRequest> CODEC = StreamCodec.composite(
+				UUIDUtil.STREAM_CODEC, DecryptRequest::noteId, DecryptRequest::new);
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
 	}
 
 	/** 客户端 → 服务端：我要钥匙圈。 */
@@ -124,6 +143,7 @@ public final class CryptoPayloads {
 	public static void register() {
 		PayloadTypeRegistry.serverboundPlay().register(KeyringRequest.TYPE, KeyringRequest.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(KeyringWrite.TYPE, KeyringWrite.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(DecryptRequest.TYPE, DecryptRequest.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(KeyringData.TYPE, KeyringData.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(KeyringWriteResult.TYPE, KeyringWriteResult.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Action.TYPE, Action.CODEC);
@@ -152,6 +172,33 @@ public final class CryptoPayloads {
 			ServerPlayer player = context.player();
 			ServerPlayNetworking.send(player, new KeyringWriteResult(payload.requestId(), write(player, payload)));
 		});
+		ServerPlayNetworking.registerGlobalReceiver(DecryptRequest.TYPE, (payload, context) -> requestDecrypt(context.player(), payload.noteId()));
+	}
+
+	/** 把加密笔记的密文发给客户端去解除加密：只有本机房主、能改这篇、它确实是加密笔记时才发。 */
+	private static void requestDecrypt(ServerPlayer player, UUID noteId) {
+		Vault vault = PalaceServer.vault();
+		if (vault == null || !allowed(player)) {
+			player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_denied"));
+			return;
+		}
+		try {
+			Optional<Vault.Read> read = vault.readNote(noteId);
+			if (read.isEmpty() || !PalaceAccess.canEdit(player, read.get().note())) {
+				player.sendSystemMessage(Component.translatable("message.memorypalace.note_unavailable"));
+				return;
+			}
+			NoteSummary note = read.get().note();
+			if (!note.encrypted() || !NoteCipher.isEncrypted(read.get().body())) {
+				player.sendSystemMessage(Component.translatable("command.memorypalace.not_encrypted", note.title()));
+				return;
+			}
+			if (!sendAction(player, noteId, "decrypt", note.title(), read.get().body())) {
+				player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", MAX_ACTION_BODY));
+			}
+		} catch (IOException e) {
+			player.sendSystemMessage(Component.translatable("message.memorypalace.read_failed"));
+		}
 	}
 
 	private static String write(ServerPlayer player, KeyringWrite payload) {

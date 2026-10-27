@@ -37,20 +37,31 @@ public final class NoteBooks {
 	}
 
 	/**
-	 * 书名：加密笔记是"【加密】文件夹/文件名"（不能泄露正文里的标题；路径在硬盘上本来就看得到，带上不多泄露什么）。
-	 * 普通笔记用正文标题。原版书名最长 32 字，超出用"…"截断。
+	 * 书名。原版成书的书名、书页谁拿着书都看得到（多人游戏里别人看不到服务器硬盘，路径也算秘密），所以：
+	 * - 世界里人人能读的笔记：正文标题，书页写文件路径
+	 * - 加密笔记："【加密笔记】#7f3a"；其余不是人人能读的（收件箱、只给部分人看的、"默认私有"世界里的）："【私密笔记】#7f3a"。
+	 *   不写标题也不写路径，只带 ID 的前 4 位，方便分清是哪几本；读得了的人对准书架时能看到真正的标题
+	 * 原版书名最长 32 字，超出用"…"截断。
 	 */
-	private static String titleFor(NoteSummary note) {
-		String path = note.relativePath();
-		String title = note.encrypted() ? "【加密】" + path.substring(0, path.length() - 3) : note.title();
+	static String titleFor(NoteSummary note) {
+		String tag = " #" + note.id().toString().substring(0, 4);
+		String title = note.encrypted() ? "【加密笔记】" + tag
+				: isPublic(note) ? note.title() : "【私密笔记】" + tag;
 		return title.length() > MAX_TITLE ? title.substring(0, MAX_TITLE - 1) + "…" : title;
 	}
 
+	private static boolean isPublic(NoteSummary note) {
+		return !note.encrypted() && note.titleIsPublic(PalaceServer.visibility());
+	}
+
+	private static Component pageFor(NoteSummary note) {
+		String where = isPublic(note) ? "对应笔记：\n" + note.relativePath() : "这是一篇不公开的笔记，只有有权限的人能打开。";
+		return Component.literal("记忆宫殿笔记书\n\n" + where + "\n\n（装了 Memory Palace 模组后右键即可阅读）");
+	}
+
 	private static void setContent(ItemStack stack, NoteSummary note) {
-		Component page = Component.literal("记忆宫殿笔记书\n\n对应笔记：\n" + note.relativePath()
-				+ "\n\n（装了 Memory Palace 模组后右键即可阅读）");
 		stack.set(DataComponents.WRITTEN_BOOK_CONTENT, new WrittenBookContent(
-				Filterable.passThrough(titleFor(note)), "记忆宫殿", 0, List.of(Filterable.passThrough(page)), true));
+				Filterable.passThrough(titleFor(note)), "记忆宫殿", 0, List.of(Filterable.passThrough(pageFor(note))), true));
 	}
 
 	/**
@@ -58,8 +69,10 @@ public final class NoteBooks {
 	 * @return 有没有改动（改了的话，书在方块里时调用方要 setChanged）
 	 */
 	public static boolean refresh(ItemStack stack, NoteSummary note) {
+		// 书名和书页都要对得上：同一个书名下，书页里的路径也可能已经过时（比如笔记改成了私密）
 		WrittenBookContent content = stack.get(DataComponents.WRITTEN_BOOK_CONTENT);
-		if (content != null && content.title().raw().equals(titleFor(note))) {
+		if (content != null && content.title().raw().equals(titleFor(note))
+				&& content.pages().size() == 1 && content.pages().getFirst().raw().equals(pageFor(note))) {
 			return false;
 		}
 		setContent(stack, note);

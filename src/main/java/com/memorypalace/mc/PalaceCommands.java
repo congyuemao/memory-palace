@@ -1,6 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
@@ -45,40 +46,92 @@ public final class PalaceCommands {
 
 	public static void register() {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-				// 只有本机房主看得到、用得了 /palace（其他玩家连补全都看不到）
+				// 每个子命令自己决定谁能用；用不了的子命令连补全都看不到
 				dispatcher.register(Commands.literal("palace")
-						.requires(source -> source.getPlayer() != null && PalaceAccess.allowed(source.getPlayer()))
+						.requires(source -> source.getPlayer() != null)
+						// 领书、新建、重扫、改可见性：管理员
 						.then(Commands.literal("give")
+								.requires(PalaceCommands::admin)
 								.then(Commands.argument("path", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(suggestions(), builder))
 										.executes(PalaceCommands::give)))
+						.then(Commands.literal("rescan").requires(PalaceCommands::admin).executes(PalaceCommands::rescan))
+						.then(Commands.literal("new")
+								.requires(PalaceCommands::admin)
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(ctx -> create(ctx, false))))
+						.then(Commands.literal("visibility")
+								.requires(PalaceCommands::admin)
+								.executes(PalaceCommands::showVisibility)
+								.then(Commands.literal("everyone").executes(ctx -> setVisibility(ctx, NoteAccess.Visibility.EVERYONE)))
+								.then(Commands.literal("private").executes(ctx -> setVisibility(ctx, NoteAccess.Visibility.PRIVATE))))
+						// 加密：只有本机房主（钥匙圈现在只有一个）
+						.then(Commands.literal("newsecret")
+								.requires(PalaceCommands::host)
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(ctx -> create(ctx, true))))
+						.then(Commands.literal("encrypt")
+								.requires(PalaceCommands::host)
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> crypto(ctx, true))))
+						.then(Commands.literal("decrypt")
+								.requires(PalaceCommands::host)
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> crypto(ctx, false))))
+						.then(Commands.literal("lock").requires(PalaceCommands::host).executes(ctx -> {
+							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
+							return 1;
+						}))
+						// 列表、查位置：谁都能用，只列出自己读得了的笔记
 						.then(Commands.literal("list")
 								.executes(ctx -> list(ctx, ""))
 								.then(Commands.argument("folder", StringArgumentType.greedyString())
 										.executes(ctx -> list(ctx, StringArgumentType.getString(ctx, "folder")))))
-						.then(Commands.literal("rescan").executes(PalaceCommands::rescan))
-						.then(Commands.literal("new")
-								.then(Commands.argument("path", StringArgumentType.greedyString())
-										.executes(ctx -> create(ctx, false))))
-						.then(Commands.literal("newsecret")
-								.then(Commands.argument("path", StringArgumentType.greedyString())
-										.executes(ctx -> create(ctx, true))))
-						.then(Commands.literal("encrypt")
-								.then(Commands.argument("note", StringArgumentType.greedyString())
-										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
-										.executes(ctx -> crypto(ctx, true))))
-						.then(Commands.literal("decrypt")
-								.then(Commands.argument("note", StringArgumentType.greedyString())
-										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
-										.executes(ctx -> crypto(ctx, false))))
-						.then(Commands.literal("lock").executes(ctx -> {
-							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
-							return 1;
-						}))
 						.then(Commands.literal("where")
 								.then(Commands.argument("note", StringArgumentType.greedyString())
-										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(), builder))
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
 										.executes(PalaceCommands::where)))));
+	}
+
+	private static boolean admin(CommandSourceStack source) {
+		return source.getPlayer() != null && PalaceAccess.admin(source.getPlayer());
+	}
+
+	private static boolean host(CommandSourceStack source) {
+		return source.getPlayer() != null && PalaceAccess.isHost(source.getPlayer());
+	}
+
+	/** 这个人读得了这篇吗？（命令里用：找不到人就当读不了） */
+	private static boolean readable(CommandSourceStack source, NoteSummary note) {
+		ServerPlayer player = source.getPlayer();
+		return player != null && PalaceAccess.canRead(player, note);
+	}
+
+	/** /palace visibility：看现在的笔记可见性。 */
+	private static int showVisibility(CommandContext<CommandSourceStack> ctx) {
+		NoteAccess.Visibility current = PalaceServer.visibility();
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.visibility_is",
+				Component.translatable("command.memorypalace.visibility." + current.id())), false);
+		return 1;
+	}
+
+	/** /palace visibility everyone|private：改世界设置"笔记可见性"（没写 palace-read 的笔记谁能读）。 */
+	private static int setVisibility(CommandContext<CommandSourceStack> ctx, NoteAccess.Visibility value) {
+		if (requireVault(ctx) == null) {
+			return 0;
+		}
+		try {
+			PalaceServer.setVisibility(value);
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.error("保存世界设置失败", e);
+			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
+			return 0;
+		}
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.visibility_set",
+				Component.translatable("command.memorypalace.visibility." + value.id())), true);
+		return 1;
 	}
 
 	/**
@@ -100,15 +153,29 @@ public final class PalaceCommands {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
 			return 0;
 		}
+		// 加密要求是作者（替别人加密，别人就再也打不开）；解除加密要求能改
+		boolean allowed = encrypt ? NoteAccess.isOwner(note.get().access(), PalaceAccess.who(player))
+				: PalaceAccess.canEdit(player, note.get());
+		if (!allowed) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.no_edit_permission", note.get().relativePath()));
+			return 0;
+		}
 		if (note.get().encrypted() == encrypt) {
 			ctx.getSource().sendFailure(Component.translatable(encrypt
 					? "command.memorypalace.already_encrypted" : "command.memorypalace.not_encrypted", note.get().title()));
 			return 0;
 		}
+		if (!encrypt) {
+			// 解除加密不直接发密文：先打开这篇，玩家在打开着的笔记上点 🔓 才算数。
+			// 客户端只认"自己正打开着的那份密文"，恶意服务端没法把别的笔记换进来骗出明文
+			PalaceInteractions.openNote(player, note.get().id());
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.decrypt_hint"), false);
+			return 1;
+		}
 		try {
 			String body = vault.readBody(note.get().id()).orElse("");
-			if ((encrypt && body.length() > CryptoPayloads.MAX_ACTION_BODY)
-					|| !CryptoPayloads.sendAction(player, note.get().id(), encrypt ? "encrypt" : "decrypt", note.get().title(), body)) {
+			if (body.length() > CryptoPayloads.MAX_ACTION_BODY
+					|| !CryptoPayloads.sendAction(player, note.get().id(), "encrypt", note.get().title(), body)) {
 				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
 				return 0;
 			}
@@ -170,7 +237,8 @@ public final class PalaceCommands {
 			return 0;
 		}
 		String path = StringArgumentType.getString(ctx, "note").strip();
-		Optional<NoteSummary> note = vault.resolve(path);
+		// 读不了的笔记当作不存在：不透露"有这么一篇、放在哪里"
+		Optional<NoteSummary> note = vault.resolve(path).filter(n -> readable(ctx.getSource(), n));
 		if (note.isEmpty()) {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
 			return 0;
@@ -276,13 +344,14 @@ public final class PalaceCommands {
 		return Component.translatable("command.memorypalace.ago.days", minutes / (60 * 24));
 	}
 
-	// /palace where 的补全：只有笔记，没有文件夹
-	private static List<String> noteSuggestions() {
+	// /palace where、encrypt、decrypt 的补全：只有笔记，没有文件夹；只列这个人读得了的
+	private static List<String> noteSuggestions(CommandSourceStack source) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			return List.of();
 		}
-		return vault.list().stream().map(n -> n.relativePath().substring(0, n.relativePath().length() - 3)).toList();
+		return vault.list().stream().filter(n -> readable(source, n))
+				.map(n -> n.relativePath().substring(0, n.relativePath().length() - 3)).toList();
 	}
 
 	private static int give(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -317,7 +386,8 @@ public final class PalaceCommands {
 		if (vault == null) {
 			return 0;
 		}
-		List<NoteSummary> notes = folder.isBlank() ? vault.list() : vault.listFolder(folder.strip());
+		List<NoteSummary> notes = (folder.isBlank() ? vault.list() : vault.listFolder(folder.strip())).stream()
+				.filter(n -> readable(ctx.getSource(), n)).toList();
 		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.list_header", notes.size()), false);
 		for (NoteSummary note : notes) {
 			ctx.getSource().sendSuccess(() -> Component.literal("  " + note.relativePath() + "  —  " + note.title()), false);

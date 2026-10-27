@@ -49,8 +49,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 
 		// 保存结果交给发起保存的那一方；/palace new 之后直接打开编辑器
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.SaveResult.TYPE, (payload, context) -> NoteSaver.onResult(payload));
-		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) ->
-				context.client().gui.setScreen(new EditorScreen(payload.noteId(), Component.literal(payload.title()), payload.body())));
+		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) -> CryptoClient.openEditor(payload));
 
 		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
 		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));

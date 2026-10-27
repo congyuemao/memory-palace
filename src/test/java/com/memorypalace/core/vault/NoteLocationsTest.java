@@ -53,8 +53,18 @@ class NoteLocationsTest {
 	void samePlaceUpdatesTimeInsteadOfDuplicating() throws IOException {
 		var locs = new NoteLocations(file());
 		locs.record(A, new Location(OW, 1, 64, 2, 0, 1000));
+		locs.record(A, new Location(OW, 1, 64, 2, 0, 90_000));
+		assertEquals(List.of(new Location(OW, 1, 64, 2, 0, 90_000)), locs.get(A));
+	}
+
+	@Test
+	void clickingAgainWithinAMinuteDoesNotRewrite() throws IOException {
+		var locs = new NoteLocations(file());
+		locs.record(A, new Location(OW, 1, 64, 2, 0, 1000));
+		long size = java.nio.file.Files.getLastModifiedTime(file()).toMillis();
 		locs.record(A, new Location(OW, 1, 64, 2, 0, 5000));
-		assertEquals(List.of(new Location(OW, 1, 64, 2, 0, 5000)), locs.get(A));
+		assertEquals(List.of(new Location(OW, 1, 64, 2, 0, 1000)), locs.get(A), "一分钟内又点一下：不更新、不重写");
+		assertEquals(size, java.nio.file.Files.getLastModifiedTime(file()).toMillis());
 	}
 
 	@Test

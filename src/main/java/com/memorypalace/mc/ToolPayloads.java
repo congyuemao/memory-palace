@@ -3,6 +3,7 @@ package com.memorypalace.mc;
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.search.NoteSearch;
 import com.memorypalace.core.vault.Inbox;
+import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
@@ -165,16 +166,17 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(LookInfo.TYPE, LookInfo.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
-		// 只有本机房主能用（见 PalaceAccess）；其他客户端发来的直接丢掉
+		// 收件箱现在只有一个（在笔记库根目录），只给本机房主用；每人一个收件箱是以后的事
 		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> {
-			if (PalaceAccess.allowed(ctx.player())) capture(ctx.player(), p.text(), p.localTime());
+			if (PalaceAccess.isHost(ctx.player())) {
+				capture(ctx.player(), p.text(), p.localTime());
+			} else {
+				ctx.player().sendSystemMessage(Component.translatable("message.memorypalace.inbox_host_only"));
+			}
 		});
-		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> {
-			if (PalaceAccess.allowed(ctx.player())) look(ctx.player(), p);
-		});
-		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> {
-			if (PalaceAccess.allowed(ctx.player())) search(ctx.player(), p);
-		});
+		// 准星书名、搜索：谁都能用，但只看得到自己读得了的笔记（每一篇单独检查）
+		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
+		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(OpenById.TYPE, (p, ctx) -> PalaceInteractions.openNote(ctx.player(), p.id()));
 	}
 
@@ -237,14 +239,20 @@ public final class ToolPayloads {
 			Vault vault = PalaceServer.vault();
 			Optional<NoteSummary> note = vault == null ? Optional.empty() : NoteBooks.idOf(book).flatMap(vault::find);
 			if (note.isPresent()) {
-				text = label(note.get());
+				text = label(note.get(), PalaceAccess.canRead(player, note.get()));
 			}
 		}
 		ServerPlayNetworking.send(player, new LookInfo(query.pos(), query.slot(), text));
 	}
 
-	/** "文件夹 / 标题"；加密笔记不显示正文标题，用"【加密】路径"。 */
-	private static String label(NoteSummary note) {
+	/**
+	 * "文件夹 / 标题"。加密笔记不显示正文标题：作者看到"【加密】路径"；
+	 * 读不了、标题也不是人人可见的笔记：和书名一样只有"【私密笔记】#7f3a"，不带路径（见 NoteBooks.titleFor）。
+	 */
+	private static String label(NoteSummary note, boolean canRead) {
+		if (!canRead && (note.encrypted() || !note.titleIsPublic(PalaceServer.visibility()))) {
+			return NoteBooks.titleFor(note); // 读不了：和书名一样，只有"【加密笔记】#7f3a"这种，不带路径
+		}
 		if (note.encrypted()) {
 			String path = note.relativePath();
 			return "【加密】" + path.substring(0, path.length() - 3);
@@ -256,9 +264,14 @@ public final class ToolPayloads {
 	// 这样狂发搜索请求也只会排队一条，不会堆出一大堆后台任务
 	private static final Map<UUID, Search> LATEST = new ConcurrentHashMap<>();
 	private static final Set<UUID> SEARCHING = ConcurrentHashMap.newKeySet();
+	private static final long SEARCH_INTERVAL_MS = 300;
+	private static final java.util.concurrent.Semaphore SEARCH_SLOTS = new java.util.concurrent.Semaphore(2);
+	// 发起搜索时（在服务端线程上）记下"这个人是谁、是不是管理员"，后台线程按它过滤
+	private static final Map<UUID, NoteAccess.Who> SEARCHER = new ConcurrentHashMap<>();
 
 	private static void search(ServerPlayer player, Search request) {
 		UUID id = player.getUUID();
+		SEARCHER.put(id, PalaceAccess.who(player));
 		LATEST.put(id, request);
 		if (SEARCHING.add(id)) {
 			Thread.ofVirtual().name("memorypalace-search").start(() -> searchLoop(player));
@@ -278,6 +291,13 @@ public final class ToolPayloads {
 				return;
 			}
 			runSearch(player, next);
+			// 两次搜索之间至少隔一会儿：打字时的请求本来就会被合并，这里只挡住一直刷新请求、让服务端不停读全库
+			try {
+				Thread.sleep(SEARCH_INTERVAL_MS);
+			} catch (InterruptedException e) {
+				SEARCHING.remove(id);
+				return;
+			}
 		}
 	}
 
@@ -290,15 +310,37 @@ public final class ToolPayloads {
 		MinecraftServer server = player.level().getServer();
 		// 搜正文要读文件，在这个后台线程里做；位置和传送命令要读世界，回到服务端线程再算
 		{
-			List<NoteSearch.Hit> hits = NoteSearch.search(vault, request.query(), MAX_RESULTS);
+			NoteAccess.Who who = SEARCHER.get(player.getUUID());
+			NoteAccess.Visibility visibility = PalaceServer.visibility();
+			if (who == null) {
+				return;
+			}
+			// 全服同时最多 2 个搜索在读盘：再多的玩家（或账号）一起刷搜索，磁盘压力也有上限
+			List<NoteSearch.Hit> hits;
+			try {
+				SEARCH_SLOTS.acquire();
+			} catch (InterruptedException e) {
+				return;
+			}
+			try {
+				hits = NoteSearch.search(vault, request.query(), MAX_RESULTS, note -> note.canRead(who, visibility));
+			} finally {
+				SEARCH_SLOTS.release();
+			}
 			server.execute(() -> {
 				List<Entry> entries = new ArrayList<>();
 				for (NoteSearch.Hit hit : hits) {
 					if (entries.size() >= MAX_RESULTS) {
 						break;
 					}
-					NoteSummary note = hit.note();
-					String title = OpenNotePayload.clip(note.encrypted() ? label(note) : note.title(), 256);
+					// 搜索在后台跑的时候权限可能变了（读正文时索引已按文件刷新）：发出去之前按此刻的权限再查一次
+					NoteAccess.Who now = PalaceAccess.who(player);
+					NoteSummary note = vault.find(hit.note().id())
+							.filter(n -> n.canRead(now, PalaceServer.visibility())).orElse(null);
+					if (note == null) {
+						continue;
+					}
+					String title = OpenNotePayload.clip(note.encrypted() ? label(note, true) : note.title(), 256);
 					String path = OpenNotePayload.clip(note.relativePath(), 512);
 					String snippet = OpenNotePayload.clip(hit.snippet(), 256);
 					// 同一篇笔记放在好几个书架上（书可以复制）：每个位置一行
