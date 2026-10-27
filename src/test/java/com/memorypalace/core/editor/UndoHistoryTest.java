@@ -103,6 +103,62 @@ class UndoHistoryTest {
 	}
 
 	@Test
+	void editAtAnotherPositionIsItsOwnStepEvenWithinTheMergeWindow() {
+		// 回归：在末尾打 d，100 毫秒后跳到开头打 X，撤销一次应只撤掉 X、留下 abcd
+		var history = new UndoHistory("abc");
+		history.changed("abcd", 0);
+		history.changed("Xabcd", 100);
+
+		assertEquals(new State("abcd", 4), history.undo(), "两处不相连的修改不能绑成一步");
+		assertEquals(new State("abc", 3), history.undo());
+		assertNull(history.undo());
+	}
+
+	@Test
+	void typingContinuesToMergeWhenEachCharFollowsThePrevious() {
+		var history = new UndoHistory("abc");
+		history.changed("Xabc", 0);
+		history.changed("XYabc", 100);
+		history.changed("XYZabc", 200);
+
+		assertEquals(new State("abc", 3), history.undo(), "在同一处连续打字仍然合成一步");
+		assertNull(history.undo());
+	}
+
+	@Test
+	void consecutiveBackspacesMerge() {
+		var history = new UndoHistory("abcde");
+		history.changed("abcd", 0);
+		history.changed("abc", 100);
+		history.changed("ab", 200);
+
+		assertEquals(new State("abcde", 5), history.undo(), "连续退格合成一步");
+		assertNull(history.undo());
+	}
+
+	@Test
+	void consecutiveForwardDeletesMerge() {
+		// 光标停在 a 后面连按 Delete：每次删掉光标后的一个字
+		var history = new UndoHistory("abcde");
+		history.changed("acde", 0);
+		history.changed("ade", 100);
+		history.changed("ae", 200);
+
+		assertEquals(new State("abcde", 5), history.undo(), "连续向后删除合成一步");
+		assertNull(history.undo());
+	}
+
+	@Test
+	void typingThenDeletingAtAnotherPlaceIsTwoSteps() {
+		var history = new UndoHistory("abc");
+		history.changed("abcd", 0);
+		history.changed("bcd", 100);
+
+		assertEquals(new State("abcd", 4), history.undo());
+		assertEquals(new State("abc", 3), history.undo());
+	}
+
+	@Test
 	void identicalTextDoesNotAddAStep() {
 		var history = new UndoHistory("a");
 		history.changed(new String("a"), 0);

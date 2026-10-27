@@ -20,6 +20,7 @@ import net.minecraft.client.gui.components.MultilineTextField;
 import net.minecraft.client.gui.components.Whence;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.lang.reflect.Field;
@@ -261,6 +262,19 @@ public class EditorScreen extends BookScreen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		// 移动光标、改选区（方向键、Home/End、翻页、Ctrl+A）之后的修改另算一步，不和之前的打字合并
+		switch (event.key()) {
+			case InputConstants.KEY_LEFT, InputConstants.KEY_RIGHT, InputConstants.KEY_UP, InputConstants.KEY_DOWN,
+					InputConstants.KEY_HOME, InputConstants.KEY_END, InputConstants.KEY_PAGEUP, InputConstants.KEY_PAGEDOWN ->
+					history.breakMerge();
+			case InputConstants.KEY_A -> {
+				if (event.hasControlDownWithQuirk()) {
+					history.breakMerge();
+				}
+			}
+			default -> {
+			}
+		}
 		if (event.hasControlDownWithQuirk()) {
 			// Ctrl+S（Mac 上是 Cmd+S）保存；Ctrl+Z 撤销；Ctrl+Y 或 Ctrl+Shift+Z 重做
 			switch (event.key()) {
@@ -281,6 +295,15 @@ public class EditorScreen extends BookScreen {
 			}
 		}
 		return super.keyPressed(event);
+	}
+
+	@Override
+	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		// 在编辑框里点一下（挪光标、双击选词、开始拖选）之后的修改另算一步
+		if (editBox != null && editBox.isMouseOver(event.x(), event.y())) {
+			history.breakMerge();
+		}
+		return super.mouseClicked(event, doubleClick);
 	}
 
 	// ---- 撤销 / 重做 ----
