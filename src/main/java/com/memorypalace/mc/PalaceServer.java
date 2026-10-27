@@ -3,6 +3,7 @@ package com.memorypalace.mc;
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
+import com.memorypalace.core.vault.NoteHistory;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.core.vault.VaultBackup;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -48,6 +49,7 @@ public final class PalaceServer {
 			Path root = worldDir.resolve(VAULT_DIR);
 			try {
 				Vault v = new Vault(root);
+				v.setHistory(new NoteHistory(v.root(), Clock.systemUTC())); // 游戏内保存时留历史版本
 				writeWelcomeNoteIfEmpty(root);
 				v.scan();
 				worldVisibility = loadVisibility(root);

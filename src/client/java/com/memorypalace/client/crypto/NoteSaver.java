@@ -33,6 +33,11 @@ public final class NoteSaver {
 		send(noteId, plain, EditPayloads.DECRYPT_PREFIX + expectedHash, callback);
 	}
 
+	/** 还原历史版本：服务端看到这个标记，会把还原前的样子一定留一份历史（可以反悔）。 */
+	public static void saveRestored(UUID noteId, String stored, String expectedHash, Consumer<EditPayloads.SaveResult> callback) {
+		send(noteId, stored, EditPayloads.RESTORE_PREFIX + expectedHash, callback);
+	}
+
 	private static void send(UUID noteId, String stored, String guard, Consumer<EditPayloads.SaveResult> callback) {
 		int id = ++session;
 		CALLBACKS.put(id, callback);

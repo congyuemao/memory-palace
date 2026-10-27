@@ -333,7 +333,9 @@ public final class Vault {
 		/** 找不到这篇笔记（被删了）。 */
 		MISSING,
 		/** 按文件里此刻的权限，这个人不能改（见带 allowed 参数的 writeBody）。 */
-		DENIED
+		DENIED,
+		/** 还原历史版本时，还原前的内容存不进历史，没有写入（见 NoteHistory）。 */
+		HISTORY_FAILED
 	}
 
 	/**
@@ -370,6 +372,27 @@ public final class Vault {
 	 */
 	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash,
 			java.util.function.Predicate<NoteSummary> allowed) throws IOException {
+		return writeBody(id, newBody, expectedHash, allowed, false);
+	}
+
+	// 历史版本（见 NoteHistory）：设置了就在 writeBody 真写文件之前存一份旧正文
+	private NoteHistory history;
+
+	public synchronized void setHistory(NoteHistory history) {
+		this.history = history;
+	}
+
+	/** 历史版本；没设置时为 null。 */
+	public synchronized NoteHistory history() {
+		return history;
+	}
+
+	/**
+	 * 同上；设置了历史版本（setHistory）时，真写文件之前按 NoteHistory 的规则存一份旧正文。
+	 * restore = 这是一次还原：旧正文一定存一份（不受 10 分钟合并限制）。
+	 */
+	public synchronized WriteResult writeBody(UUID id, String newBody, String expectedHash,
+			java.util.function.Predicate<NoteSummary> allowed, boolean restore) throws IOException {
 		if (id == null) {
 			return WriteResult.MISSING;
 		}
@@ -407,7 +430,22 @@ public final class Vault {
 						String written = frontMatter + body;
 						// 内容一个字都没变：不写文件（也就不触发外部编辑器、热重载、备份那一串）
 						if (!written.equals(text.startsWith("﻿") ? text.substring(1) : text)) {
+							// 存不下历史：普通保存照样写（不能因为历史存不了就不让保存）；
+							// 还原不写——还原前的内容没留下来，一还原就再也找不回来了
+							if (history != null && !history.record(id, parsed.body().replace("\r\n", "\n"),
+									body.replace("\r\n", "\n"), restore) && restore) {
+								return WriteResult.HISTORY_FAILED;
+							}
 							writeAtomically(file, written);
+						}
+						// 现在是加密笔记：正文写好之后清掉明文历史（刚加密的、上次没清干净的）
+						// 正文已经写好了：清理出任何问题都不能改变"保存成功"的结果（purgePlain 自己不抛异常，这里再兜一层）
+						if (history != null && Ciphertext.isEncrypted(body)) {
+							try {
+								history.purgePlain(id);
+							} catch (RuntimeException e) {
+								// 下次保存时再清
+							}
 						}
 						// 只更新这一篇的卡片，不整库重扫：保存可能很频繁，整库扫描会被刷成拒绝服务
 						updateIndex(summarize(id, note.relativePath(), FrontMatter.parse(written)), modifiedTime(file));

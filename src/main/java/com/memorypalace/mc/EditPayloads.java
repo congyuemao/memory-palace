@@ -33,6 +33,8 @@ public final class EditPayloads {
 	private static final int MAX_CHUNKS = 512;
 	/** expectedHash 以它开头表示"这是一次解除加密"：只有这种保存才允许把加密笔记写成明文。 */
 	public static final String DECRYPT_PREFIX = "decrypt:";
+	/** expectedHash 以它开头表示"这是一次还原历史版本"：还原前的样子一定留一份历史（可以反悔）。 */
+	public static final String RESTORE_PREFIX = "restore:";
 
 	private EditPayloads() {}
 
@@ -160,6 +162,10 @@ public final class EditPayloads {
 			return;
 		}
 		String guard = a.expectedHash();
+		boolean restore = guard.startsWith(RESTORE_PREFIX);
+		if (restore) {
+			guard = guard.substring(RESTORE_PREFIX.length());
+		}
 		boolean decrypt = guard.startsWith(DECRYPT_PREFIX);
 		if (decrypt) {
 			guard = guard.substring(DECRYPT_PREFIX.length());
@@ -198,7 +204,8 @@ public final class EditPayloads {
 					note -> note.canEdit(who) && (note.encrypted()
 							? bodyEncrypted || mayDecrypt
 							: !bodyEncrypted || mayCrypt && NoteAccess.isOwner(note.access(), who))
-							&& (bodyEncrypted || mayDecrypt || FolderLocks.lockedFolderOf(vault, note).isEmpty()));
+							&& (bodyEncrypted || mayDecrypt || FolderLocks.lockedFolderOf(vault, note).isEmpty()),
+					restore);
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);

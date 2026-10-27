@@ -87,6 +87,7 @@ Inspired by [ins@aamanda.li](https://www.instagram.com/aamanda.li)'s [meme reel]
 | `/palace lockfolder <文件夹>` | 给文件夹单独设密码，里面的笔记用文件夹密码加密 |
 | `/palace folderpassword <文件夹>` | 修改文件夹密码 |
 | `/palace unlockfolder <文件夹>` | 解除文件夹密码，里面的笔记改回明文 |
+| `/palace history <笔记>` | 查看历史版本，可以点「查看」只读打开或点「还原」（能改这篇的人才能用） |
 | `/palace sharepassword <笔记>` | 给自己的一篇加密笔记设置 / 更换阅读密码，知道密码的人可以阅读（只读） |
 | `/palace unsharepassword <笔记>` | 取消阅读密码 |
 | `/palace lock` | 立即给加密笔记上锁（含已解锁的文件夹、输过的阅读密码） |
@@ -95,6 +96,17 @@ Inspired by [ins@aamanda.li](https://www.instagram.com/aamanda.li)'s [meme reel]
 | `/palace reload` | 重新读取服务端配置文件（管理员） |
 
 命令里的笔记路径可以省略 `.md`，可以含空格和中文；领书、查位置、分享等命令按 `Tab` 可补全笔记路径。
+
+## 历史版本
+
+在游戏内保存笔记时，保存前的内容会留一份在 `.palace/history/<笔记ID>/`，每篇最多留最新的 5 份。`/palace history <笔记>` 列出它们，点「查看」只读打开，点「还原」恢复成那个版本。
+
+- 10 分钟内连续保存只留一份（这段编辑开始前的样子），所以 5 份大约是最近 5 次编辑。
+- 还原也算一次保存，还原前的内容一定会留一份，点错了可以再还原回来。
+- 只记游戏内的保存；在 Obsidian 等外部编辑器里改的不记（整库备份仍然有效）。
+- 能改这篇的人才能看历史、还原；只读的人看不到。
+- 加密笔记的历史只存密文。明文笔记被加密时，以前的明文历史会被删掉。还原加密笔记时，旧版本会用现在的锁重新加密：已经取消的阅读密码不会跟着旧版本回来。
+- 不算进每人的篇数配额。
 
 ## 笔记库
 

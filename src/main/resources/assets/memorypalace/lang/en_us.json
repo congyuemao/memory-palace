@@ -264,5 +264,21 @@
 	"message.memorypalace.read_password_again": "The reading password is needed again: please open the book again",
 	"command.memorypalace.read_password_inbox": "Inbox notes cannot have a reading password",
 	"command.memorypalace.read_password_not_encrypted": "\"%s\" is not encrypted yet. Encrypt it first with /palace encrypt",
-	"command.memorypalace.no_read_password": "\"%s\" has no reading password"
+	"command.memorypalace.no_read_password": "\"%s\" has no reading password",
+	"command.memorypalace.history_header": "History of \"%s\" (newest first, up to 5; saves within 10 minutes keep only the state before that session):",
+	"command.memorypalace.history_empty": "\"%s\" has no history yet (only in-game saves are recorded)",
+	"command.memorypalace.history_chars": "%s chars",
+	"command.memorypalace.history_encrypted": "encrypted",
+	"command.memorypalace.history_view": "[View]",
+	"command.memorypalace.history_restore": "[Restore]",
+	"command.memorypalace.history_view_hover": "Open this version read-only",
+	"command.memorypalace.history_restore_hover": "Restore this version (the current content is kept in history, so you can undo)",
+	"command.memorypalace.history_missing": "This version no longer exists (newer versions may have replaced it)",
+	"command.memorypalace.history_restore_encrypted": "This version is encrypted but the note no longer is, so it cannot be restored (it would be saved as plain text)",
+	"screen.memorypalace.history_title": "%s (old version)",
+	"screen.memorypalace.confirm_restore.title": "Restore \"%s\" to this version?",
+	"screen.memorypalace.confirm_restore.message": "This version begins: %s\nThe current content is kept in history, so you can restore it later.",
+	"screen.memorypalace.confirm_restore.yes": "Restore",
+	"message.memorypalace.restore_history_failed": "Not restored: the current content could not be saved to history (the server disk may be full or read-only), so it could not be recovered afterwards",
+	"message.memorypalace.restored":"Restored. The previous content is kept in history (/palace history)"
 }

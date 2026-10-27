@@ -158,6 +158,7 @@ public final class ClientKeys {
 		BookScreen.clearMathFailures();
 		Screen screen = mc.gui.screen();
 		if (screen instanceof BookScreen book && book.isEncrypted()
+				|| screen instanceof com.memorypalace.client.HistoryScreen history && history.secret()
 				|| screen instanceof PasswordScreen || screen instanceof RecoveryKeyScreen) {
 			mc.gui.setScreen(null);
 		}
