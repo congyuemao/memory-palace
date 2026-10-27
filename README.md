@@ -21,6 +21,8 @@
 - 笔记库就是一个普通文件夹，可以直接用 Obsidian、Typora 打开编辑，游戏里即时刷新。
 - 备份笔记 = 备份一个文件夹。
 
+> 灵感来自博主 **aamanda.li** 的一条 meme 视频：有人在课堂上打开 Minecraft，用书与笔记笔记——"craziest new method for taking notes in class"。这个模组想让这种记法真的好用起来。
+
 ## 功能
 
 **阅读与书写**
