@@ -43,7 +43,17 @@ import java.util.UUID;
  */
 public final class PalaceInteractions {
 	// 再大的笔记，排版和渲染都会很慢；超过这个大小请拆分（约 70 万汉字 / 200 万字母）
-	private static final long MAX_FILE_BYTES = 2 * 1024 * 1024;
+	static final long MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+	/** 笔记文件超过 MAX_FILE_BYTES（读之前先看大小，不让大文件被反复整篇读进来）。查不了大小也当太大。 */
+	static boolean tooLarge(Vault vault, UUID id) {
+		try {
+			Optional<Path> path = vault.pathOf(id);
+			return path.isPresent() && Files.exists(path.get()) && Files.size(path.get()) > MAX_FILE_BYTES;
+		} catch (IOException e) {
+			return true;
+		}
+	}
 
 	private PalaceInteractions() {}
 
@@ -59,6 +69,9 @@ public final class PalaceInteractions {
 				return null;
 			}
 			// 客户端也返回 SUCCESS，挡住原版在客户端直接打开看书界面
+			if (level.isClientSide()) {
+				markLocalOpen(id.get());
+			}
 			if (player instanceof ServerPlayer serverPlayer) {
 				refreshBook(stack, id.get());
 				openNote(serverPlayer, id.get());
@@ -74,6 +87,10 @@ public final class PalaceInteractions {
 
 			// 讲台：右键打开上面的笔记书；潜行 + 右键走原版（原版界面里有"取书"按钮）
 			if (state.getBlock() instanceof LecternBlock) {
+				// 客户端不知道讲台上是哪本书（原版不同步），只能确认上面确实放着书
+				if (level.isClientSide() && !player.isSecondaryUseActive() && state.getValue(LecternBlock.HAS_BOOK)) {
+					markLocalOpen(null);
+				}
 				if (player.isSecondaryUseActive()
 						|| !(player instanceof ServerPlayer serverPlayer)
 						|| !(level.getBlockEntity(hit.getBlockPos()) instanceof LecternBlockEntity lectern)) {
@@ -117,6 +134,13 @@ public final class PalaceInteractions {
 			if (player.getMainHandItem().is(ItemTags.BOOKSHELF_BOOKS)) {
 				return InteractionResult.PASS;
 			}
+			// 客户端看不到书架里是哪本书（原版不同步），只能确认点中的格子里有书
+			if (level.isClientSide()) {
+				OptionalInt clicked = shelf.getHitSlot(hit, state.getValue(HorizontalDirectionalBlock.FACING));
+				if (clicked.isPresent() && state.getValue(ChiseledBookShelfBlock.SLOT_OCCUPIED_PROPERTIES.get(clicked.getAsInt()))) {
+					markLocalOpen(null);
+				}
+			}
 			// 客户端看不到书架里有什么书（原版不同步），所以由服务端判断
 			if (!(player instanceof ServerPlayer serverPlayer)
 					|| !(level.getBlockEntity(hit.getBlockPos()) instanceof ChiseledBookShelfBlockEntity shelfEntity)) {
@@ -138,6 +162,33 @@ public final class PalaceInteractions {
 			}
 			return InteractionResult.SUCCESS;
 		});
+	}
+
+	// 客户端这一侧：玩家上一次亲手右键笔记书 / 放着书的讲台 / 书架上有书的格子的时间，以及（手里拿着书时）是哪一篇。
+	// 服务端发来"输阅读密码"时，客户端只在刚右键过（几秒内、用一次作废、手持的书要对得上）时才弹框，
+	// 恶意服务端不能随时弹框骗密码
+	private record LocalOpen(UUID noteId, long atNanos) {}
+
+	private static volatile LocalOpen localOpen;
+
+	private static void markLocalOpen(UUID noteId) {
+		localOpen = new LocalOpen(noteId, System.nanoTime());
+	}
+
+	/** 客户端用：离开世界、进入世界时清掉（不能把上一个服务器里的右键带到下一个服务器）。 */
+	public static void clearLocalOpen() {
+		localOpen = null;
+	}
+
+	/**
+	 * 客户端用：玩家是不是在 withinNanos 之内亲手右键过这篇的书（用一次就作废）。
+	 * 讲台、书架上的书客户端不知道是哪篇，只能按"刚右键过一本书"算。
+	 */
+	public static boolean takeLocalOpen(UUID noteId, long withinNanos) {
+		LocalOpen open = localOpen;
+		localOpen = null;
+		return open != null && System.nanoTime() - open.atNanos() <= withinNanos
+				&& (open.noteId() == null || open.noteId().equals(noteId));
 	}
 
 	/** 书名跟笔记现状对不上（改了标题、被加密了）就顺手改掉。 */
@@ -209,7 +260,8 @@ public final class PalaceInteractions {
 		// 先按索引里的卡片挡掉明显读不了的（每 2 秒按文件刷新一次），免得别人的笔记也要整篇读一遍才拒绝；
 		// 卡片说读得了，下面 readNote 还会按文件此刻的内容再查一次
 		if (vault.find(id).filter(n -> PalaceAccess.canRead(player, n)).isEmpty()) {
-			if (!refresh) {
+			// 设了阅读密码的加密笔记：让对方输密码（见 SharePayloads），不说"读不了"
+			if (!refresh && !SharePayloads.offer(player, id)) {
 				player.sendSystemMessage(Component.translatable("message.memorypalace.note_unavailable"));
 			}
 			return false;
@@ -232,7 +284,7 @@ public final class PalaceInteractions {
 			Optional<Vault.Read> read = vault.readNote(id);
 			if (read.isEmpty() || !PalaceAccess.canRead(player, read.get().note())) {
 				// "不存在"和"没权限"说法一样：不透露有没有这篇、是不是别人的收件箱或带锁笔记
-				if (!refresh) {
+				if (!refresh && (read.isEmpty() || !SharePayloads.offer(player, id))) {
 					player.sendSystemMessage(Component.translatable("message.memorypalace.note_unavailable"));
 				}
 				return false;

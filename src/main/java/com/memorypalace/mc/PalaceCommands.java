@@ -118,6 +118,17 @@ public final class PalaceCommands {
 								.then(Commands.argument("folder", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(lockedFolderSuggestions(ctx.getSource()), builder))
 										.executes(ctx -> folderLockAction(ctx, "unlock_folder"))))
+						// 单篇阅读密码：把一篇自己的加密笔记分享给知道密码的人（只读）
+						.then(Commands.literal("sharepassword")
+								.requires(PalaceCommands::canCrypto)
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(secretSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> readPassword(ctx, true))))
+						.then(Commands.literal("unsharepassword")
+								.requires(PalaceCommands::canCrypto)
+								.then(Commands.argument("note", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(secretSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> readPassword(ctx, false))))
 						.then(Commands.literal("lock").requires(PalaceCommands::canCrypto).executes(ctx -> {
 							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
 							return 1;
@@ -233,6 +244,78 @@ public final class PalaceCommands {
 			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
 			return 0;
 		}
+	}
+
+	/**
+	 * /palace sharepassword|unsharepassword &lt;笔记&gt;：给自己的加密笔记设置 / 修改 / 取消阅读密码。
+	 * 服务端没有钥匙：检查通过后把密文发给客户端，客户端换一把新的内容钥匙重新加密（加上或去掉 p 锁）再存回来。
+	 */
+	private static int readPassword(CommandContext<CommandSourceStack> ctx, boolean set) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		if (!CryptoPayloads.allowed(player)) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_denied"));
+			return 0;
+		}
+		String path = StringArgumentType.getString(ctx, "note").strip();
+		Optional<NoteSummary> note = resolveNote(vault, player, path).filter(n -> PalaceAccess.canRead(player, n));
+		if (note.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
+			return 0;
+		}
+		if (!NoteAccess.isOwner(note.get().access(), PalaceAccess.who(player))) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.share_not_owner", note.get().title()));
+			return 0;
+		}
+		if (note.get().inbox()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.read_password_inbox"));
+			return 0;
+		}
+		if (!note.get().encrypted()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.read_password_not_encrypted", note.get().title()));
+			return 0;
+		}
+		if (!PalaceAccess.admin(player) && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
+		try {
+			Optional<Vault.Read> read = vault.readNote(note.get().id());
+			if (read.isEmpty()) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
+				return 0;
+			}
+			String body = read.get().body();
+			if (!set && SharePayloads.passwordLock(read.get().note(), body).isEmpty()) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.no_read_password", note.get().title()));
+				return 0;
+			}
+			if (body.length() > CryptoPayloads.MAX_ACTION_BODY * 4
+					|| !CryptoPayloads.sendAction(player, note.get().id(), set ? "set_read_password" : "remove_read_password",
+							note.get().title(), body)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
+				return 0;
+			}
+			return 1;
+		} catch (IOException e) {
+			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
+			return 0;
+		}
+	}
+
+	// /palace sharepassword、unsharepassword 的补全：自己的加密笔记（收件箱除外）
+	private static List<String> secretSuggestions(CommandSourceStack source) {
+		Vault vault = PalaceServer.vault();
+		ServerPlayer player = source.getPlayer();
+		if (vault == null || player == null) {
+			return List.of();
+		}
+		NoteAccess.Who who = PalaceAccess.who(player);
+		return vault.list().stream().filter(n -> n.encrypted() && !n.inbox() && NoteAccess.isOwner(n.access(), who))
+				.map(PalaceCommands::noteCommandPath).toList();
 	}
 
 	/**

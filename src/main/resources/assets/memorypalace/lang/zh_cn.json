@@ -248,5 +248,21 @@
 	"crypto.memorypalace.verify_folder_password": "请输入这个文件夹现在的密码",
 	"crypto.memorypalace.verify_unlock_folder": "解除文件夹密码前，请输入这个文件夹的密码",
 	"crypto.memorypalace.folder_recover_title": "重设文件夹「%s」的密码",
-	"crypto.memorypalace.folder_new_password_title": "文件夹「%s」的新密码"
+	"crypto.memorypalace.folder_new_password_title": "文件夹「%s」的新密码",
+	"crypto.memorypalace.read_title": "输入阅读密码",
+	"crypto.memorypalace.read_message": "这是别人的加密笔记，作者设了阅读密码。\n向作者要密码，输对了就能阅读（只读，不能修改）。",
+	"crypto.memorypalace.read_checking": "正在核对……",
+	"crypto.memorypalace.read_timeout": "服务器没有回应，请重试",
+	"crypto.memorypalace.read_wait":"试错次数太多，请 %s 秒后再试",
+	"crypto.memorypalace.read_wrong_wait": "密码错误。试错次数太多，请 %s 秒后再试",
+	"crypto.memorypalace.read_setup_title": "给「%s」设阅读密码",
+	"crypto.memorypalace.read_setup_message": "知道这个密码、手里有这本书的人就能阅读这篇（只读，不能修改）。\n至少 %s 位，建议用一句话；不要和保险库密码相同，也不要在游戏聊天里发。\n已经设过的话，旧密码会立刻失效。\n这篇的开头：%s",
+	"crypto.memorypalace.saving_note": "正在保存……",
+	"message.memorypalace.read_password_set": "已设置阅读密码。把这本书交给对方（或放在讲台、书架上），对方右键就能输入密码阅读。之前看过的人记下的内容收不回。",
+	"message.memorypalace.read_password_removed": "已取消阅读密码。之前看过的人记下的内容收不回。",
+	"message.memorypalace.read_password_changed": "这篇的阅读密码刚刚更换或取消了，请重新打开",
+	"message.memorypalace.read_password_again": "需要重新输入阅读密码：请重新打开这本书",
+	"command.memorypalace.read_password_inbox": "收件箱不能设阅读密码",
+	"command.memorypalace.read_password_not_encrypted": "「%s」还没有加密，请先用 /palace encrypt 加密",
+	"command.memorypalace.no_read_password": "「%s」没有设阅读密码"
 }

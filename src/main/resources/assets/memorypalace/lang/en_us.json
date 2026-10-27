@@ -248,5 +248,21 @@
 	"crypto.memorypalace.verify_folder_password": "Enter this folder's current password",
 	"crypto.memorypalace.verify_unlock_folder": "Enter this folder's password to remove it",
 	"crypto.memorypalace.folder_recover_title": "Reset the password of folder \"%s\"",
-	"crypto.memorypalace.folder_new_password_title": "New password for folder \"%s\""
+	"crypto.memorypalace.folder_new_password_title": "New password for folder \"%s\"",
+	"crypto.memorypalace.read_title": "Enter the reading password",
+	"crypto.memorypalace.read_message": "This is someone else's encrypted note, protected by a reading password.\nAsk the author for it. With the right password you can read it (read-only).",
+	"crypto.memorypalace.read_checking": "Checking with the server…",
+	"crypto.memorypalace.read_timeout": "The server did not respond. Please try again",
+	"crypto.memorypalace.read_wait":"Too many wrong attempts. Try again in %s seconds",
+	"crypto.memorypalace.read_wrong_wait": "Wrong password. Too many wrong attempts, try again in %s seconds",
+	"crypto.memorypalace.read_setup_title": "Set a reading password for \"%s\"",
+	"crypto.memorypalace.read_setup_message": "Anyone who has this book and knows the password can read this note (read-only).\nAt least %s characters; a sentence works well. Don't reuse your vault password and don't send it in game chat.\nIf a password is already set, the old one stops working immediately.\nThis note begins: %s",
+	"crypto.memorypalace.saving_note": "Saving…",
+	"message.memorypalace.read_password_set": "Reading password set. Give this book to your friend (or put it on a lectern or bookshelf); they can right-click it and enter the password. People who already read it may have kept a copy.",
+	"message.memorypalace.read_password_removed": "Reading password removed. People who already read it may have kept a copy.",
+	"message.memorypalace.read_password_changed": "The reading password of this note was just changed or removed. Please open it again",
+	"message.memorypalace.read_password_again": "The reading password is needed again: please open the book again",
+	"command.memorypalace.read_password_inbox": "Inbox notes cannot have a reading password",
+	"command.memorypalace.read_password_not_encrypted": "\"%s\" is not encrypted yet. Encrypt it first with /palace encrypt",
+	"command.memorypalace.no_read_password": "\"%s\" has no reading password"
 }

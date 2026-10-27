@@ -2,6 +2,7 @@ package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.crypto.Ciphertext;
+import com.memorypalace.core.crypto.NoteEnvelope;
 import com.memorypalace.core.vault.FolderLocks;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteSummary;
@@ -169,6 +170,18 @@ public final class EditPayloads {
 		if (wasEncrypted && !Ciphertext.isEncrypted(body) && (!decrypt || !CryptoPayloads.allowed(player))) {
 			reply(player, chunk, "REFUSED", "");
 			return;
+		}
+		// 新格式密文：格式要对，阅读密码锁最多一把（核对阅读密码时只认一把，多出来的锁谁也说不清是哪个密码）
+		if (NoteEnvelope.isEnvelope(body)) {
+			try {
+				if (NoteEnvelope.passwordLockCount(body) > 1) {
+					reply(player, chunk, "ERROR", "");
+					return;
+				}
+			} catch (IllegalArgumentException e) {
+				reply(player, chunk, "ERROR", "");
+				return;
+			}
 		}
 		// 写入前按文件此刻的内容再判断一次：权限、加密状态都可能在收块期间被外部改了
 		// 加密状态只能这样变：

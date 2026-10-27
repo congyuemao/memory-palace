@@ -57,7 +57,7 @@ class NoteEnvelopeTest {
 	void everyLockIndependentlyUnlocksAndInsertionOrderIsPreserved() throws Exception {
 		MasterKey master = new MasterKey(keyBytes(3));
 		MasterKey folderMaster = new MasterKey(keyBytes(4));
-		NoteEnvelope.Lock passwordLock = passwordLock("a2id,8,1,1," + base64(new byte[16]));
+		NoteEnvelope.Lock passwordLock = passwordLock("a2id,8,1,1," + base64(new byte[16]) + CHECK);
 		Map<NoteEnvelope.Lock, byte[]> locks = new LinkedHashMap<>();
 		try {
 			locks.put(USER, NoteEnvelope.userWrappingKey(master));
@@ -219,8 +219,9 @@ class NoteEnvelopeTest {
 			assertEquals(NoteEnvelope.Kind.PASSWORD, second.lock().kind());
 			String[] firstFields = first.lock().id().split(",", -1);
 			String[] secondFields = second.lock().id().split(",", -1);
-			assertEquals(5, firstFields.length);
-			assertEquals(5, secondFields.length);
+			assertEquals(6, firstFields.length);
+			assertEquals(6, secondFields.length);
+			assertEquals(32, Base64.getDecoder().decode(firstFields[5]).length);
 			assertArrayEquals(new String[]{"a2id", Integer.toString(PasswordKdf.MEMORY_KIB),
 					Integer.toString(PasswordKdf.ITERATIONS), Integer.toString(PasswordKdf.PARALLELISM)},
 					Arrays.copyOf(firstFields, 4));
@@ -243,6 +244,135 @@ class NoteEnvelopeTest {
 			NoteCipher.wipe(second.wrappingKey());
 			NoteCipher.wipe(derived);
 			NoteCipher.wipe(wrong);
+		}
+	}
+
+	@Test
+	void readerDerivesTheSameKeysFromTheChallengeAndOnlyTheRightVerifierPasses() throws Exception {
+		char[] password = "一句话当阅读密码".toCharArray();
+		var created = NoteEnvelope.newPasswordLock(password);
+		NoteEnvelope.PasswordKeys right = null;
+		NoteEnvelope.PasswordKeys wrong = null;
+		try {
+			String challenge = NoteEnvelope.passwordChallenge(created.lock());
+			// 题目不含最后一段（验证码的哈希），发出去也没法离线猜密码
+			assertEquals(5, challenge.split(",", -1).length);
+			assertTrue(created.lock().id().startsWith(challenge + ","));
+			right = NoteEnvelope.passwordKeys(challenge, password);
+			assertArrayEquals(created.wrappingKey(), right.wrappingKey());
+			assertEquals(32, right.verifier().length);
+			assertFalse(Arrays.equals(right.wrappingKey(), right.verifier()));
+			assertTrue(NoteEnvelope.checkPassword(created.lock(), right.verifier()));
+
+			wrong = NoteEnvelope.passwordKeys(challenge, "猜错的密码".toCharArray());
+			assertFalse(NoteEnvelope.checkPassword(created.lock(), wrong.verifier()));
+			assertFalse(NoteEnvelope.checkPassword(created.lock(), null));
+			assertFalse(NoteEnvelope.checkPassword(created.lock(), new byte[31]));
+			assertFalse(NoteEnvelope.checkPassword(USER, right.verifier()));
+			assertFalse(NoteEnvelope.checkPassword(passwordLock(challenge + ",not-base64"), right.verifier()));
+			// 换了盐（重新设密码）之后，旧的验证码不再通过
+			var again = NoteEnvelope.newPasswordLock(password);
+			try {
+				assertFalse(NoteEnvelope.checkPassword(again.lock(), right.verifier()));
+			} finally {
+				NoteCipher.wipe(again.wrappingKey());
+			}
+		} finally {
+			Arrays.fill(password, '\0');
+			NoteCipher.wipe(created.wrappingKey());
+			if (right != null) {
+				right.wipe();
+			}
+			if (wrong != null) {
+				wrong.wipe();
+			}
+		}
+	}
+
+	@ParameterizedTest
+	@NullAndEmptySource
+	@ValueSource(strings = {"a2id,8,1,1", "argon2i,8,1,1,AAAAAAAAAAAAAAAAAAAAAA==", "a2id,999999,1,1,AAAAAAAAAAAAAAAAAAAAAA==",
+			"a2id,8,1,1,AAAAAAAAAAAAAAAAAAAAAA==,extra"})
+	void passwordKeysRejectsMalformedChallenges(String challenge) {
+		assertThrows(IllegalArgumentException.class, () -> NoteEnvelope.passwordKeys(challenge, "password".toCharArray()));
+	}
+
+	@Test
+	void onlyChallengesAtLeastAsStrongAsTheDefaultsAreAccepted() {
+		String salt = base64(new byte[16]);
+		var created = NoteEnvelope.newPasswordLock("default-strength".toCharArray());
+		try {
+			assertTrue(NoteEnvelope.challengeIsStrong(NoteEnvelope.passwordChallenge(created.lock())));
+		} finally {
+			NoteCipher.wipe(created.wrappingKey());
+		}
+		assertTrue(NoteEnvelope.challengeIsStrong("a2id,131072,3,2," + salt));
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,8,1,1," + salt));
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,65536,2,1," + salt));
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,32768,3,1," + salt));
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,262144,10,1," + salt)); // 超出允许范围
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,65536,3,1," + base64(new byte[15])));
+		assertFalse(NoteEnvelope.challengeIsStrong("a2id,65536,3,1"));
+		assertFalse(NoteEnvelope.challengeIsStrong(null));
+	}
+
+	@Test
+	void passwordChallengeRejectsNonPasswordAndFiveFieldLocks() {
+		assertThrows(IllegalArgumentException.class, () -> NoteEnvelope.passwordChallenge(USER));
+		assertThrows(IllegalArgumentException.class,
+				() -> NoteEnvelope.passwordChallenge(passwordLock("a2id,8,1,1," + base64(new byte[16]))));
+	}
+
+	@Test
+	void passwordLockLookupFindsTheOnlyPasswordLock() {
+		NoteEnvelope.Lock password = passwordLock("a2id,8,1,1," + base64(new byte[16]) + CHECK);
+		String userOnly = NoteEnvelope.seal(NOTE, key, "正文", Map.of(USER, wrappingKey));
+		Map<NoteEnvelope.Lock, byte[]> locks = new LinkedHashMap<>();
+		locks.put(USER, wrappingKey);
+		locks.put(password, wrappingKey);
+		String both = NoteEnvelope.seal(NOTE, key, "正文", locks);
+		assertTrue(NoteEnvelope.passwordLock(userOnly).isEmpty());
+		assertEquals(0, NoteEnvelope.passwordLockCount(userOnly));
+		assertEquals(password, NoteEnvelope.passwordLock(both).orElseThrow());
+		assertEquals(1, NoteEnvelope.passwordLockCount(both));
+		locks.put(passwordLock("a2id,8,1,1," + base64(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}) + CHECK), wrappingKey);
+		assertEquals(2, NoteEnvelope.passwordLockCount(NoteEnvelope.seal(NOTE, key, "正文", locks)));
+	}
+
+	@Test
+	void unlockAsUserPrefersTheGivenIdButFallsBackToOtherUserLocks() throws Exception {
+		MasterKey master = new MasterKey(keyBytes(7));
+		MasterKey stranger = new MasterKey(keyBytes(8));
+		byte[] mine = NoteEnvelope.userWrappingKey(master);
+		byte[] theirs = NoteEnvelope.userWrappingKey(stranger);
+		try {
+			Map<NoteEnvelope.Lock, byte[]> locks = new LinkedHashMap<>();
+			locks.put(NoteEnvelope.Lock.user("someone-else"), theirs);
+			locks.put(NoteEnvelope.Lock.user("old-account"), mine);
+			locks.put(FOLDER, wrappingKey);
+			String envelope = NoteEnvelope.seal(NOTE, key, "换了账号也能打开", locks);
+			for (String preferred : new String[]{"old-account", "new-account", "someone-else"}) {
+				ContentKey opened = NoteEnvelope.unlockAsUser(NOTE, envelope, master, preferred);
+				try {
+					assertEquals("换了账号也能打开", NoteEnvelope.decrypt(NOTE, envelope, opened));
+				} finally {
+					opened.destroy();
+				}
+			}
+			MasterKey wrong = new MasterKey(keyBytes(9));
+			try {
+				assertThrows(WrongKeyException.class, () -> NoteEnvelope.unlockAsUser(NOTE, envelope, wrong, "old-account"));
+			} finally {
+				wrong.destroy();
+			}
+			String folderOnly = NoteEnvelope.seal(NOTE, key, "x", Map.of(FOLDER, wrappingKey));
+			assertThrows(WrongKeyException.class, () -> NoteEnvelope.unlockAsUser(NOTE, folderOnly, master, "old-account"));
+			assertThrows(WrongKeyException.class, () -> NoteEnvelope.unlockAsUser(NOTE, "MPAL2:broken", master, "old-account"));
+		} finally {
+			NoteCipher.wipe(mine);
+			NoteCipher.wipe(theirs);
+			master.destroy();
+			stranger.destroy();
 		}
 	}
 
@@ -467,7 +597,7 @@ class NoteEnvelopeTest {
 		ids.put("long salt", "a2id,8,1,1," + base64(new byte[17]));
 		ids.put("unpadded salt", "a2id,8,1,1," + salt.replace("=", ""));
 		ids.put("noncanonical salt padding bits", "a2id,8,1,1," + nonzeroPaddingBits(salt));
-		ids.forEach((description, id) -> cases.put(description, passwordLock(id)));
+		ids.forEach((description, id) -> cases.put(description, passwordLock(id + CHECK)));
 		return cases.entrySet().stream().map(entry -> Arguments.of(entry.getKey(), entry.getValue()));
 	}
 
@@ -532,6 +662,9 @@ class NoteEnvelopeTest {
 		Arrays.fill(bytes, (byte) value);
 		return bytes;
 	}
+
+	// 密码锁标识最后一段（验证码的 SHA-256）：算包装钥匙时不看它的值
+	private static final String CHECK = "," + Base64.getEncoder().encodeToString(new byte[32]);
 
 	private static NoteEnvelope.Lock passwordLock(String id) {
 		return new NoteEnvelope.Lock(NoteEnvelope.Kind.PASSWORD, id);

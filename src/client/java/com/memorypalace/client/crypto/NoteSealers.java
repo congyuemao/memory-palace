@@ -35,6 +35,14 @@ public final class NoteSealers {
 		return SEALERS.containsKey(noteId) || ClientKeys.unlocked();
 	}
 
+	/** 忘掉这一篇的内容钥匙（清零）。用阅读密码打开的别人的笔记，阅读密码钥匙作废时一起作废。 */
+	public static void forget(UUID noteId) {
+		Sealer old = SEALERS.remove(noteId);
+		if (old != null) {
+			old.key().destroy();
+		}
+	}
+
 	/** 是不是 MPAL2 笔记（登记过）。 */
 	public static boolean isEnvelope(UUID noteId) {
 		return SEALERS.containsKey(noteId);
@@ -77,9 +85,24 @@ public final class NoteSealers {
 		}
 	}
 
+	// 刚生成、还在等服务端确认保存的内容钥匙（换阅读密码时）：服务端一直不回也不能让它熬过上锁
+	private static final java.util.Set<ContentKey> PENDING = new java.util.HashSet<>();
+
+	/** 登记一把还在等保存结果的新内容钥匙；上锁时一起清零。 */
+	public static void pending(ContentKey key) {
+		PENDING.add(key);
+	}
+
+	/** 保存有结果了：不再算"等结果"（存好了另外用 remember 登记，没存好调用方自己销毁）。 */
+	public static void settled(ContentKey key) {
+		PENDING.remove(key);
+	}
+
 	/** 上锁、离开世界：内容钥匙全部清零。 */
 	public static void clear() {
 		SEALERS.values().forEach(s -> s.key().destroy());
 		SEALERS.clear();
+		PENDING.forEach(ContentKey::destroy);
+		PENDING.clear();
 	}
 }

@@ -3,6 +3,7 @@ package com.memorypalace.client.crypto;
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.crypto.MasterKey;
+import com.memorypalace.core.crypto.NoteEnvelope;
 import com.memorypalace.core.crypto.WrongKeyException;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -24,7 +25,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 /**
- * 输密码的界面，一个界面五种用途（见下面的静态工厂方法）：首次设置、解锁、用恢复密钥重置、改密码、验证本人。
+ * 输密码的界面，一个界面多种用途（见下面的静态工厂方法）：首次设置、解锁、用恢复密钥重置、改密码、验证本人、
+ * 文件夹密码、单篇阅读密码。
  * 密码按"•"显示；Argon2 算一次要半秒左右，放到后台线程做，界面不卡。
  * 后台算完时如果已经取消 / 上锁 / 离开世界（"代次"变了），结果作废并销毁，不会迟到地把它解锁。
  */
@@ -356,6 +358,82 @@ public class PasswordScreen extends Screen {
 					destroy(key.get());
 					wipe(password.get());
 				}, null);
+	}
+
+	/**
+	 * 读别人设了阅读密码的笔记：输密码 → 后台用 derive 算出钥匙 → onKeys（交给服务端核对，界面停在"正在核对"，
+	 * 结果回来时由 ReadPasswords 关掉或调用 rejected）。status 是一开始就显示的提示（比如上次密码不对）。
+	 * onCancel：玩家取消时调用。
+	 */
+	public static PasswordScreen readPassword(Component status, java.util.function.Function<char[], NoteEnvelope.PasswordKeys> derive,
+			java.util.function.Consumer<NoteEnvelope.PasswordKeys> onKeys, Runnable onCancel) {
+		AtomicReference<NoteEnvelope.PasswordKeys> keys = new AtomicReference<>();
+		AtomicReference<PasswordScreen> self = new AtomicReference<>();
+		PasswordScreen screen = new PasswordScreen(t("read_title"), t("read_message"), new Component[]{t("password")}, true, null,
+				values -> {
+					keys.set(derive.apply(values[0]));
+					return null;
+				},
+				() -> {
+					self.get().waitFor(t("read_checking"));
+					onKeys.accept(keys.getAndSet(null));
+				},
+				() -> {
+					NoteEnvelope.PasswordKeys k = keys.getAndSet(null);
+					if (k != null) {
+						k.wipe();
+					}
+				}, null) {
+			@Override
+			public void onClose() {
+				onCancel.run(); // 取消（含"正在核对"时按 Esc）：发出去的那次作废
+				super.onClose();
+			}
+		};
+		screen.status = status;
+		self.set(screen);
+		return screen;
+	}
+
+	/**
+	 * 给自己的一篇加密笔记设（或换）阅读密码：输两遍 → 后台生成密码锁 → onLock（调用方重新加密、存好后关掉界面）。
+	 * preview 是真正解出来的正文开头：标题是服务端说的，恶意服务端可能把别的笔记换进来，让玩家看一眼到底要分享的是什么。
+	 * 取消时什么都不改。
+	 */
+	public static PasswordScreen newReadPassword(String title, String preview, java.util.function.Consumer<NoteEnvelope.PasswordLock> onLock) {
+		AtomicReference<NoteEnvelope.PasswordLock> lock = new AtomicReference<>();
+		AtomicReference<PasswordScreen> self = new AtomicReference<>();
+		PasswordScreen screen = new PasswordScreen(t("read_setup_title", title), t("read_setup_message", KeyRing.MIN_PASSWORD, preview),
+				new Component[]{t("password"), t("password_again")}, true, null,
+				values -> {
+					Component error = checkNewPassword(values);
+					if (error != null) {
+						return error;
+					}
+					lock.set(NoteEnvelope.newPasswordLock(values[0]));
+					return null;
+				},
+				() -> {
+					self.get().waitFor(t("saving_note"));
+					onLock.accept(lock.getAndSet(null));
+				},
+				() -> {
+					NoteEnvelope.PasswordLock l = lock.getAndSet(null);
+					if (l != null) {
+						Arrays.fill(l.wrappingKey(), (byte) 0);
+					}
+				}, null);
+		self.set(screen);
+		return screen;
+	}
+
+	/** 服务端核对没通过（密码不对、要等一会儿）：解开按钮，显示原因，可以重输。 */
+	void rejected(Component why) {
+		busy = false;
+		if (okButton != null) {
+			okButton.active = true;
+		}
+		status = why;
 	}
 
 	private static Component checkNewPassword(char[][] values) {

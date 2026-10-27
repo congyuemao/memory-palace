@@ -135,7 +135,7 @@ public final class ClientKeys {
 	 */
 	public static void lock(boolean announce) {
 		Minecraft mc = Minecraft.getInstance();
-		boolean wasUnlocked = unlocked() || FolderKeys.any();
+		boolean wasUnlocked = unlocked() || FolderKeys.any() || ReadPasswords.any();
 		// 正在编辑的加密笔记（即使当前停在"放弃修改？"对话框上）有没保存的内容：先加密暂存再尝试保存
 		EditorScreen editor = activeEditor;
 		if (wasUnlocked && editor != null) {
@@ -153,6 +153,7 @@ public final class ClientKeys {
 		// 文件夹钥匙、每篇笔记的内容钥匙一起清零（草稿已经在上面用它们加密暂存过了）
 		FolderKeys.clear();
 		NoteSealers.clear();
+		ReadPasswords.clear(); // 别人笔记的阅读密码钥匙：下次打开要重输
 		RasterTextures.clear();
 		BookScreen.clearMathFailures();
 		Screen screen = mc.gui.screen();
@@ -191,8 +192,8 @@ public final class ClientKeys {
 	 */
 	public static long secondsUntilLock() {
 		int minutes = BookSettings.autoLock().minutes;
-		// 只解锁了某个文件夹（没输保险库密码）也要按时上锁
-		if (!(unlocked() || FolderKeys.any()) || minutes <= 0) {
+		// 只解锁了某个文件夹、只输过别人笔记的阅读密码（没输保险库密码）也要按时上锁
+		if (!(unlocked() || FolderKeys.any() || ReadPasswords.any()) || minutes <= 0) {
 			return -1;
 		}
 		long leftMs = minutes * 60_000L - (System.currentTimeMillis() - lastUse);

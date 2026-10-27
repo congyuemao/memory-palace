@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
  * 锁的种类：
  * - u（USER）：某个玩家钥匙圈里的主密钥，标识 = 玩家 UUID（或单人时代的 "host"）
  * - f（FOLDER）：文件夹钥匙（文件夹独立密码），标识 = 文件夹钥匙的 ID
- * - p（PASSWORD）：单篇阅读密码，标识 = "a2id,内存KiB,迭代次数,并行度,Base64(盐)"
+ * - p（PASSWORD）：单篇阅读密码，标识 = "a2id,内存KiB,迭代次数,并行度,Base64(盐),Base64(SHA-256(验证码))"（见下面"单篇阅读密码"）
  * 好处：加锁、换锁、分享都只改锁，不用重新加密正文；文件夹独立密码就是"只有 f 锁、没有 u 锁"。
  * <p>
  * 安全要点：
@@ -130,6 +130,33 @@ public final class NoteEnvelope {
 		}
 	}
 
+	/**
+	 * 用玩家主密钥取出内容钥匙：先试 preferred 这把 u 锁（自己的 UUID），再试其余 u 锁
+	 * （换了账号、单人时代的 "host" 等）。都打不开 → WrongKeyException。
+	 */
+	public static ContentKey unlockAsUser(UUID noteId, String envelope, MasterKey master, String preferred)
+			throws WrongKeyException {
+		List<Lock> users = new ArrayList<>();
+		for (Lock lock : parseOrWrongKey(envelope).wraps().keySet()) {
+			if (lock.kind() == Kind.USER) {
+				users.add(lock.id().equals(preferred) ? 0 : users.size(), lock);
+			}
+		}
+		byte[] wrapping = userWrappingKey(master);
+		try {
+			for (Lock lock : users) {
+				try {
+					return unlock(noteId, envelope, lock, wrapping);
+				} catch (WrongKeyException e) {
+					// 试下一把
+				}
+			}
+			throw NoteCipher.wrongKey();
+		} finally {
+			NoteCipher.wipe(wrapping);
+		}
+	}
+
 	/** 解密正文。钥匙不对、被改过、格式不对 → WrongKeyException。 */
 	public static String decrypt(UUID noteId, String envelope, ContentKey key) throws WrongKeyException {
 		Objects.requireNonNull(noteId, "noteId");
@@ -203,28 +230,52 @@ public final class NoteEnvelope {
 		}
 	}
 
+	// ---- 单篇阅读密码（p 锁） ----
+	// 密码 → Argon2id（随机盐）→ 中间值，再经 HKDF 分成两样：
+	// - 包装钥匙：只在客户端，用来锁内容钥匙
+	// - 验证码：交给服务端核对"密码对不对"，对了才把密文发给对方。服务端只存验证码的 SHA-256（写在锁标识最后一段），
+	//   拿着笔记文件的人也没法直接拿它去冒充
+	// 锁标识 = "a2id,内存KiB,迭代次数,并行度,Base64(盐),Base64(SHA-256(验证码))"；
+	// 前五段叫"题目"（challenge），服务端发给想读的人，让对方客户端照着算；最后一段绝不发出去（否则能离线猜密码不受限速）
+
 	/** 新的单篇阅读密码锁：随机盐、默认参数。返回锁和它的包装钥匙（调用方用完清零）。 */
 	public record PasswordLock(Lock lock, byte[] wrappingKey) {}
+
+	/** 从阅读密码算出的两样东西。用完调用 wipe()。 */
+	public record PasswordKeys(byte[] wrappingKey, byte[] verifier) {
+		public void wipe() {
+			NoteCipher.wipe(wrappingKey);
+			NoteCipher.wipe(verifier);
+		}
+	}
 
 	public static PasswordLock newPasswordLock(char[] password) {
 		byte[] salt = new byte[PasswordKdf.SALT_LENGTH];
 		RANDOM.nextBytes(salt);
-		Lock lock = new Lock(Kind.PASSWORD, "a2id," + PasswordKdf.MEMORY_KIB + "," + PasswordKdf.ITERATIONS + ","
-				+ PasswordKdf.PARALLELISM + "," + Base64.getEncoder().encodeToString(salt));
+		String challenge = "a2id," + PasswordKdf.MEMORY_KIB + "," + PasswordKdf.ITERATIONS + ","
+				+ PasswordKdf.PARALLELISM + "," + Base64.getEncoder().encodeToString(salt);
+		NoteCipher.wipe(salt);
+		PasswordKeys keys = passwordKeys(challenge, password);
 		try {
-			return new PasswordLock(lock, PasswordKdf.derive(password, salt, PasswordKdf.MEMORY_KIB,
-					PasswordKdf.ITERATIONS, PasswordKdf.PARALLELISM));
+			Lock lock = new Lock(Kind.PASSWORD, challenge + "," + Base64.getEncoder().encodeToString(sha256(keys.verifier())));
+			return new PasswordLock(lock, keys.wrappingKey().clone());
 		} finally {
-			NoteCipher.wipe(salt);
+			keys.wipe();
 		}
 	}
 
-	/** 按密码锁标识里记下的参数和盐，从密码算出包装钥匙。不是密码锁、参数不合法 → IllegalArgumentException。 */
-	public static byte[] passwordWrappingKey(Lock lock, char[] password) {
-		if (lock.kind() != Kind.PASSWORD) {
-			throw new IllegalArgumentException("不是密码锁");
-		}
-		String[] parts = lock.id().split(",", -1);
+	/** 密码锁的"题目"（前五段：参数和盐），可以发给想读的人。不是密码锁、格式不对 → IllegalArgumentException。 */
+	public static String passwordChallenge(Lock lock) {
+		String[] parts = passwordParts(lock);
+		return String.join(",", parts[0], parts[1], parts[2], parts[3], parts[4]);
+	}
+
+	/**
+	 * 按"题目"从密码算出包装钥匙和验证码（读的人、作者都用它）。题目格式不对、参数超范围 → IllegalArgumentException。
+	 * 要跑一次 Argon2（约半秒），别在渲染线程上调用。
+	 */
+	public static PasswordKeys passwordKeys(String challenge, char[] password) {
+		String[] parts = challenge == null ? new String[0] : challenge.split(",", -1);
 		if (parts.length != 5 || !parts[0].equals("a2id")) {
 			throw new IllegalArgumentException("密码锁参数不受支持");
 		}
@@ -232,11 +283,84 @@ public final class NoteEnvelope {
 		int iterations = number(parts[2]);
 		int parallelism = number(parts[3]);
 		byte[] salt = decode(parts[4], PasswordKdf.SALT_LENGTH);
+		byte[] secret = null;
 		try {
 			// derive 会先检查参数范围，被改坏的参数不会把内存吃光
-			return PasswordKdf.derive(password, salt, memory, iterations, parallelism);
+			secret = PasswordKdf.derive(password, salt, memory, iterations, parallelism);
+			return new PasswordKeys(hkdf(secret, "MPAL2|wrap|password"), hkdf(secret, "MPAL2|verify|password"));
 		} finally {
 			NoteCipher.wipe(salt);
+			NoteCipher.wipe(secret);
+		}
+	}
+
+	/**
+	 * 服务端发来的题目够不够强：参数不低于现在的默认值（m ≥ 64MiB、t ≥ 3）。读者客户端只照着强题目算——
+	 * 否则恶意服务端可以发一道极弱的题，骗玩家输入密码，拿到能高速离线猜的验证码。格式不对 → false。
+	 */
+	public static boolean challengeIsStrong(String challenge) {
+		String[] parts = challenge == null ? new String[0] : challenge.split(",", -1);
+		if (parts.length != 5 || !parts[0].equals("a2id")) {
+			return false;
+		}
+		try {
+			int memory = number(parts[1]);
+			int iterations = number(parts[2]);
+			int parallelism = number(parts[3]);
+			decode(parts[4], PasswordKdf.SALT_LENGTH);
+			return PasswordKdf.check(memory, iterations, parallelism)
+					&& memory >= PasswordKdf.MEMORY_KIB && iterations >= PasswordKdf.ITERATIONS;
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+	}
+
+	/** 按密码锁算出包装钥匙（作者自己用，比如测试或以后换锁）。调用方用完清零。 */
+	public static byte[] passwordWrappingKey(Lock lock, char[] password) {
+		PasswordKeys keys = passwordKeys(passwordChallenge(lock), password);
+		NoteCipher.wipe(keys.verifier());
+		return keys.wrappingKey();
+	}
+
+	/** 服务端核对验证码（常数时间比较）。格式不对、不是密码锁 → false。 */
+	public static boolean checkPassword(Lock lock, byte[] verifier) {
+		if (verifier == null || verifier.length != 32) {
+			return false;
+		}
+		try {
+			byte[] expected = decode(passwordParts(lock)[5], 32);
+			return java.security.MessageDigest.isEqual(expected, sha256(verifier));
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+	}
+
+	/** 这篇笔记的阅读密码锁；没有就是 empty。格式不对 → IllegalArgumentException。 */
+	public static java.util.Optional<Lock> passwordLock(String envelope) {
+		return locks(envelope).stream().filter(lock -> lock.kind() == Kind.PASSWORD).findFirst();
+	}
+
+	/** 有几把阅读密码锁（每篇最多该有一把）。格式不对 → IllegalArgumentException。 */
+	public static long passwordLockCount(String envelope) {
+		return locks(envelope).stream().filter(lock -> lock.kind() == Kind.PASSWORD).count();
+	}
+
+	private static String[] passwordParts(Lock lock) {
+		if (lock.kind() != Kind.PASSWORD) {
+			throw new IllegalArgumentException("不是密码锁");
+		}
+		String[] parts = lock.id().split(",", -1);
+		if (parts.length != 6 || !parts[0].equals("a2id")) {
+			throw new IllegalArgumentException("密码锁参数不受支持");
+		}
+		return parts;
+	}
+
+	private static byte[] sha256(byte[] data) {
+		try {
+			return java.security.MessageDigest.getInstance("SHA-256").digest(data);
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("无法执行 SHA-256");
 		}
 	}
 
