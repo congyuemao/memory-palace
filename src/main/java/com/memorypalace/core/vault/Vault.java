@@ -434,6 +434,11 @@ public final class Vault {
 	 * - 原子写，写完更新索引，返回新笔记的 NoteSummary
 	 */
 	public synchronized NoteSummary createNote(String relativePath, String body) throws IOException {
+		return createNote(relativePath, body, null);
+	}
+
+	/** 同上；owner 不为 null 时在 front matter 里写上 palace-owner（作者）。 */
+	public synchronized NoteSummary createNote(String relativePath, String body, UUID owner) throws IOException {
 		if (relativePath == null || relativePath.isEmpty()) {
 			throw new IllegalArgumentException("笔记路径不能为空");
 		}
@@ -484,7 +489,8 @@ public final class Vault {
 		do {
 			id = UUID.randomUUID();
 		} while (index.containsKey(id));
-		String text = "---\npalace-id: " + id + "\n---\n" + newBody;
+		String text = "---\npalace-id: " + id + "\n"
+				+ (owner == null ? "" : NoteAccess.OWNER_KEY + ": " + owner + "\n") + "---\n" + newBody;
 		Files.createDirectories(file.getParent());
 		Path temporary = Files.createTempFile(file.getParent(), ".palace-", ".tmp");
 		try {
@@ -498,6 +504,58 @@ public final class Vault {
 		}
 		scan();
 		return find(id).orElseThrow(() -> new IOException("新笔记未能加入索引"));
+	}
+
+	/**
+	 * 改一篇笔记的分享名单（front matter 里的 palace-read / palace-edit），正文和其他字段不动。
+	 * 和 writeBody 一样：读文件、用刚读出来的卡片交给 allowed 判断、写文件在同一把锁里，权限以这一刻的文件为准。
+	 * change 拿到现在的设置，返回新的设置；没变就不写文件。
+	 * @return OK / MISSING / DENIED（不会是 CONFLICT）
+	 */
+	public synchronized WriteResult updateAccess(UUID id, java.util.function.UnaryOperator<NoteAccess.Rules> change,
+			java.util.function.Predicate<NoteSummary> allowed) throws IOException {
+		if (id == null) {
+			return WriteResult.MISSING;
+		}
+		for (int attempt = 0; attempt < 2; attempt++) {
+			NoteSummary note = index.get(id);
+			if (note != null) {
+				Path file = root.resolve(note.relativePath());
+				String text = null;
+				try {
+					text = Files.readString(file, StandardCharsets.UTF_8);
+				} catch (NoSuchFileException e) {
+					// 旧路径消失后重新扫描一次，以 ID 追踪改名后的文件。
+				}
+				if (text != null) {
+					FrontMatter.Parsed parsed = FrontMatter.parse(text);
+					if (id.equals(parsed.id())) {
+						NoteSummary fresh = summarize(id, note.relativePath(), parsed);
+						updateIndex(fresh, modifiedTime(file));
+						if (!allowed.test(fresh)) {
+							return WriteResult.DENIED;
+						}
+						NoteAccess.Rules changed = change.apply(fresh.access());
+						if (changed.equals(fresh.access())) {
+							return WriteResult.OK;
+						}
+						String written = text.startsWith("﻿") ? text.substring(1) : text;
+						for (Map.Entry<String, String> field : NoteAccess.fields(changed).entrySet()) {
+							written = FrontMatter.withField(written, field.getKey(), field.getValue());
+						}
+						writeAtomically(file, written);
+						updateIndex(summarize(id, note.relativePath(), FrontMatter.parse(written)), modifiedTime(file));
+						return WriteResult.OK;
+					}
+				}
+			}
+			if (attempt == 0 && mayRescanFor(id)) {
+				scan();
+			} else {
+				break;
+			}
+		}
+		return WriteResult.MISSING;
 	}
 
 	/** 输入是已解析、去 BOM 的完整 front matter；只编辑加密标记行。 */

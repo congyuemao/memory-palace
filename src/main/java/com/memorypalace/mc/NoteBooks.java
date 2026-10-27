@@ -51,7 +51,7 @@ public final class NoteBooks {
 	}
 
 	private static boolean isPublic(NoteSummary note) {
-		return !note.encrypted() && note.titleIsPublic(PalaceServer.visibility());
+		return !note.encrypted() && PalaceAccess.titleIsPublic(note);
 	}
 
 	private static Component pageFor(NoteSummary note) {

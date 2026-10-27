@@ -154,9 +154,12 @@ public final class ImagePayloads {
 	 * 图片所在的文件夹，以及它往上的每一级（一直到根目录），都不能是收件箱、也不能放着这个人读不了的笔记：
 	 * "私密/附件/图.png" 跟着 "私密/" 里的笔记一起保密；Obsidian 的中央附件文件夹 "assets/" 跟着根目录里的笔记一起保密。
 	 * 宁可多挡：根目录里只要有一篇这个人读不了的笔记，他就看不到任何图。私密笔记请放进子文件夹。
+	 * 例外：玩家个人区 players/&lt;UUID&gt;/ 里的图只查到个人区为止，不受个人区外面（根目录等）的笔记牵连，
+	 * 否则"默认私有"的世界里，根目录有一篇别人读不了的笔记，所有玩家连自己的图都看不到。
 	 */
 	private static boolean folderReadable(Vault vault, String folder, NoteAccess.Who who, NoteAccess.Visibility visibility) {
 		String f = folder;
+		String top = personalArea(folder);
 		while (true) {
 			if (f.equals(Inbox.FOLDER) || f.startsWith(Inbox.FOLDER + "/")) {
 				return false;
@@ -164,12 +167,22 @@ public final class ImagePayloads {
 			if (vault.listFolder(f).stream().anyMatch(n -> !n.canRead(who, visibility))) {
 				return false;
 			}
-			if (f.isEmpty()) {
+			if (f.equals(top)) {
 				return true;
 			}
 			int slash = f.lastIndexOf('/');
 			f = slash < 0 ? "" : f.substring(0, slash);
 		}
+	}
+
+	// 文件夹在哪个玩家的个人区里就返回 "players/<UUID>"，不在个人区里返回 ""（根目录）
+	private static String personalArea(String folder) {
+		String prefix = PalaceCommands.PLAYERS_FOLDER + "/";
+		if (!folder.startsWith(prefix)) {
+			return "";
+		}
+		int slash = folder.indexOf('/', prefix.length());
+		return slash < 0 ? folder : folder.substring(0, slash);
 	}
 
 	/** src 确实是这篇正文里的图片引用：Markdown 的 ](src 或 Obsidian 的 [[src（也接受 <src> 写法）。 */

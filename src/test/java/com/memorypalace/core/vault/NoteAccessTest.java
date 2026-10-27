@@ -1,5 +1,6 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.vault.NoteAccess.Level;
 import com.memorypalace.core.vault.NoteAccess.Rules;
 import com.memorypalace.core.vault.NoteAccess.Visibility;
 import com.memorypalace.core.vault.NoteAccess.Who;
@@ -10,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -107,6 +109,163 @@ class NoteAccessTest {
 		assertTrue(NoteAccess.canRead(r, true, ALICE_PLAYER, EVERYONE));
 		assertFalse(NoteAccess.canRead(Rules.NONE, true, ALICE_PLAYER, EVERYONE), "无主的收件箱只有管理员能看");
 		assertTrue(NoteAccess.canRead(Rules.NONE, true, HOST, EVERYONE));
+	}
+
+	@Test
+	void nobodyCannotAccessExplicitlySharedNotes() {
+		for (Rules r : new Rules[]{
+				rules("palace-owner", ALICE.toString(), "palace-read", "everyone"),
+				rules("palace-owner", ALICE.toString(), "palace-edit", "everyone"),
+				rules("palace-read", "everyone", "palace-edit", "everyone")}) {
+			assertFalse(NoteAccess.canRead(r, false, Who.NOBODY, EVERYONE), "写了 everyone 也不能让无身份的人读");
+			assertFalse(NoteAccess.canEdit(r, false, Who.NOBODY), "写了 everyone 也不能让无身份的人改");
+			assertFalse(NoteAccess.isOwner(r, Who.NOBODY));
+		}
+	}
+
+	@Test
+	void nobodyCannotAccessNotesThroughPublicVisibility() {
+		for (Rules r : new Rules[]{Rules.NONE, rules("palace-owner", ALICE.toString())}) {
+			assertFalse(NoteAccess.canRead(r, false, Who.NOBODY, EVERYONE), "公开世界也要求有玩家身份");
+			assertFalse(NoteAccess.canEdit(r, false, Who.NOBODY));
+			assertFalse(NoteAccess.isOwner(r, Who.NOBODY));
+		}
+	}
+
+	@Test
+	void adminWithoutPlayerIdentityDoesNotOwnUnownedNotes() {
+		Who anonymousAdmin = new Who(null, true);
+		assertFalse(NoteAccess.isOwner(Rules.NONE, anonymousAdmin), "没有玩家身份就不能当无主笔记的作者");
+		assertFalse(NoteAccess.canRead(Rules.NONE, false, anonymousAdmin, EVERYONE));
+		assertFalse(NoteAccess.canEdit(Rules.NONE, false, anonymousAdmin));
+	}
+
+	@Test
+	void sharingEditAppendsTargetAndKeepsReadList() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-read", CAROL.toString(), "palace-edit", ALICE.toString());
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			Rules shared = NoteAccess.share(r, target, Level.EDIT, PRIVATE);
+			assertEquals(ALICE, shared.owner());
+			assertEquals(r.read(), shared.read(), "分享编辑权限不改阅读名单");
+			assertEquals(List.of(ALICE, target), List.copyOf(shared.edit()), "原有编辑者保留，新目标加在末尾");
+			assertEquals(Set.of(ALICE), r.edit(), "原规则不变");
+		}
+	}
+
+	@Test
+	void sharingEditDoesNotCreateReadListOnPublicNotes() {
+		Rules r = rules("palace-owner", ALICE.toString());
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			Rules shared = NoteAccess.share(r, target, Level.EDIT, EVERYONE);
+			assertEquals(new Rules(ALICE, null, Set.of(target)), shared);
+		}
+	}
+
+	@Test
+	void sharingReadLeavesAlreadyPublicNotesUnchanged() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-edit", CAROL.toString());
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			assertSame(r, NoteAccess.share(r, target, Level.READ, EVERYONE), "本来公开的笔记不用加阅读名单");
+		}
+	}
+
+	@Test
+	void sharingReadCreatesListOnPrivateNotes() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-edit", CAROL.toString());
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			Rules shared = NoteAccess.share(r, target, Level.READ, PRIVATE);
+			assertEquals(new Rules(ALICE, Set.of(target), Set.of(CAROL)), shared);
+			assertNull(r.read(), "原规则仍然没有阅读名单");
+		}
+	}
+
+	@Test
+	void sharingReadAppendsToExplicitListEvenInPublicWorld() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-read", CAROL + ", " + ALICE, "palace-edit", CAROL.toString());
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			Rules shared = NoteAccess.share(r, target, Level.READ, EVERYONE);
+			assertEquals(ALICE, shared.owner());
+			assertEquals(List.of(CAROL, ALICE, target), List.copyOf(shared.read()), "阅读名单保留原顺序，新目标加在末尾");
+			assertEquals(r.edit(), shared.edit());
+			assertEquals(List.of(CAROL, ALICE), List.copyOf(r.read()), "原规则不变");
+		}
+	}
+
+	@Test
+	void unsharingRemovesTargetFromBothLists() {
+		for (UUID target : new UUID[]{BOB, Rules.EVERYONE_ID}) {
+			Rules r = new Rules(ALICE, Set.of(CAROL, target), Set.of(ALICE, target));
+			Rules unshared = NoteAccess.unshare(r, target, EVERYONE);
+			assertEquals(new Rules(ALICE, Set.of(CAROL), Set.of(ALICE)), unshared, "只移除目标，保留其他人和作者");
+			assertTrue(r.read().contains(target), "原阅读名单不变");
+			assertTrue(r.edit().contains(target), "原编辑名单不变");
+		}
+	}
+
+	@Test
+	void unsharingEveryoneMakesImplicitlyPublicNotePrivate() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-edit", "everyone");
+		Rules unshared = NoteAccess.unshare(r, Rules.EVERYONE_ID, EVERYONE);
+		assertEquals(new Rules(ALICE, Set.of(), Set.of()), unshared);
+		assertFalse(NoteAccess.canRead(unshared, false, BOB_PLAYER, EVERYONE), "空阅读名单覆盖世界的公开设置");
+	}
+
+	@Test
+	void unsharingPlayerKeepsMissingReadList() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-edit", BOB.toString());
+		for (Visibility visibility : new Visibility[]{EVERYONE, PRIVATE}) {
+			Rules unshared = NoteAccess.unshare(r, BOB, visibility);
+			assertEquals(new Rules(ALICE, null, Set.of()), unshared, "移除某个人不会把缺省阅读名单变成空名单");
+		}
+	}
+
+	@Test
+	void unsharingEveryoneKeepsMissingReadListInPrivateWorld() {
+		Rules r = rules("palace-owner", ALICE.toString(), "palace-edit", "everyone");
+		assertEquals(new Rules(ALICE, null, Set.of()), NoteAccess.unshare(r, Rules.EVERYONE_ID, PRIVATE));
+	}
+
+	@Test
+	void fieldsUseNullToRemoveMissingReadAndEmptyEdit() {
+		Map<String, String> fields = NoteAccess.fields(rules("palace-owner", ALICE.toString()));
+		assertEquals(Set.of(NoteAccess.READ_KEY, NoteAccess.EDIT_KEY), fields.keySet(), "只输出分享字段，不改作者");
+		assertNull(fields.get(NoteAccess.READ_KEY));
+		assertNull(fields.get(NoteAccess.EDIT_KEY));
+	}
+
+	@Test
+	void fieldsWriteEmptyReadListAsBrackets() {
+		Map<String, String> fields = NoteAccess.fields(rules("palace-read", "[]"));
+		assertEquals("[]", fields.get(NoteAccess.READ_KEY), "空名单必须保留，不能当成缺省字段删掉");
+		assertNull(fields.get(NoteAccess.EDIT_KEY));
+	}
+
+	@Test
+	void fieldsKeepUuidInsertionOrder() {
+		Rules r = rules("palace-read", BOB + ", " + ALICE, "palace-edit", CAROL + ", " + BOB);
+		assertEquals(Map.of(NoteAccess.READ_KEY, BOB + ", " + ALICE,
+				NoteAccess.EDIT_KEY, CAROL + ", " + BOB), NoteAccess.fields(r));
+	}
+
+	@Test
+	void fieldsCollapseMixedEveryoneLists() {
+		Rules r = rules("palace-read", BOB + ", everyone, " + ALICE, "palace-edit", CAROL + ", everyone");
+		assertEquals(Map.of(NoteAccess.READ_KEY, "everyone", NoteAccess.EDIT_KEY, "everyone"), NoteAccess.fields(r));
+	}
+
+	@Test
+	void fieldsRoundTripAfterDroppingNullValues() {
+		// fields 只输出分享字段，因此这里使用无主规则，单独验证阅读和编辑名单的往返。
+		for (Rules r : new Rules[]{Rules.NONE,
+				rules("palace-read", "[]"),
+				rules("palace-edit", BOB.toString()),
+				rules("palace-read", BOB.toString()),
+				rules("palace-read", BOB + ", " + ALICE, "palace-edit", CAROL + ", " + BOB),
+				rules("palace-read", "everyone", "palace-edit", "everyone")}) {
+			Map<String, String> fields = new java.util.LinkedHashMap<>(NoteAccess.fields(r));
+			fields.values().removeIf(value -> value == null);
+			assertEquals(r, NoteAccess.parse(fields), "往返后保留缺省、空名单和显式名单的区别：" + r);
+		}
 	}
 
 	@Test

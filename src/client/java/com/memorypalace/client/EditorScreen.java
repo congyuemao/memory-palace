@@ -210,6 +210,7 @@ public class EditorScreen extends BookScreen {
 					Component.translatable("screen.memorypalace.conflict_cancel")));
 			case "MISSING" -> status = Component.translatable("screen.memorypalace.save_missing");
 			case "BUSY" -> status = Component.translatable("screen.memorypalace.save_busy");
+			case "TOO_LONG" -> status = Component.translatable("screen.memorypalace.save_too_long");
 			default -> status = Component.translatable("screen.memorypalace.save_failed");
 		}
 	}

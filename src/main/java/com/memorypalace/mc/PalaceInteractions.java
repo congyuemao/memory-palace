@@ -193,6 +193,12 @@ public final class PalaceInteractions {
 			}
 			return false;
 		}
+		if (!PalaceAccess.enabled(player)) {
+			if (!refresh) {
+				player.sendSystemMessage(Component.translatable("message.memorypalace.multiplayer_off"));
+			}
+			return false;
+		}
 		try {
 			// 单人游戏里读文件在服务端线程上，太大的文件会卡顿，先挡掉（多人版再改成后台读取）
 			Optional<Path> path = vault.pathOf(id);

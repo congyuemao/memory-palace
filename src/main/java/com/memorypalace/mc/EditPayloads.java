@@ -135,6 +135,12 @@ public final class EditPayloads {
 			return;
 		}
 		String body = String.join("", a.parts());
+		// 普通玩家一篇最多多少字（配置文件 max_note_chars），挡住把服务器硬盘写满；管理员不限
+		int maxChars = PalaceConfig.get().maxNoteChars();
+		if (maxChars > 0 && body.length() > maxChars && !PalaceAccess.admin(player)) {
+			reply(player, chunk, "TOO_LONG", "");
+			return;
+		}
 
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {

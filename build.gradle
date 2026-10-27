@@ -39,6 +39,16 @@ dependencies {
 	implementation "com.password4j:password4j:${project.password4j_version}"
 	include "com.password4j:password4j:${project.password4j_version}"
 
+	// 权限：服务器上装了 LuckPerms 等权限模组时按它的设置，没装时退回到原版 OP 等级（约 12KB，打包进模组）
+	implementation "me.lucko:fabric-permissions-api:${project.fabric_permissions_api_version}"
+	include "me.lucko:fabric-permissions-api:${project.fabric_permissions_api_version}"
+
+	// 服务端配置文件 config/memorypalace-server.toml（带注释、默认值、校验；NeoForge 的配置系统也用它）
+	for (String lib : ["core", "toml"]) {
+		implementation "com.electronwill.night-config:${lib}:${project.night_config_version}"
+		include "com.electronwill.night-config:${lib}:${project.night_config_version}"
+	}
+
 	// Mod Menu 是可选的：编译时用它的接口，开发版游戏里也装上方便测试，但不打包进模组
 	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 	runtimeOnly "com.terraformersmc:modmenu:${project.modmenu_version}"

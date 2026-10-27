@@ -113,6 +113,43 @@ public final class FrontMatter {
 		return result.append(text, closing, text.length()).toString();
 	}
 
+	/**
+	 * 返回把字段 key 设为 value 之后的完整文本（value 为 null = 删掉这个字段）：
+	 * - 已有这个字段：替换第一行，同名的其余行删掉；没有就加在 front matter 末尾
+	 * - 没有 front matter：value 不为 null 时在最前面加一个；为 null 时原样返回
+	 * - 其他行、正文一个字节都不改；保留原文的换行风格；BOM 去掉
+	 */
+	public static String withField(String text, String key, String value) {
+		text = withoutBom(text);
+		String newline = text.contains("\r\n") ? "\r\n" : "\n";
+		int closing = closingDelimiter(text);
+		if (closing < 0) {
+			return value == null ? text : "---" + newline + key + ": " + value + newline + "---" + newline + text;
+		}
+		int start = nextLine(text, 0);
+		StringBuilder result = new StringBuilder(text.substring(0, start));
+		boolean written = false;
+		while (start < closing) {
+			int end = lineEnd(text, start);
+			int next = nextLine(text, start);
+			String line = text.substring(start, end);
+			int colon = line.indexOf(':');
+			if (colon >= 0 && line.substring(0, colon).strip().equals(key)) {
+				if (value != null && !written) {
+					result.append(key).append(": ").append(value).append(text, end, next);
+					written = true;
+				}
+			} else {
+				result.append(text, start, next);
+			}
+			start = next;
+		}
+		if (value != null && !written) {
+			result.append(key).append(": ").append(value).append(newline);
+		}
+		return result.append(text, closing, text.length()).toString();
+	}
+
 	private static String withoutBom(String text) {
 		return text.startsWith("\uFEFF") ? text.substring(1) : text;
 	}

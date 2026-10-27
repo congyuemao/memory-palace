@@ -30,7 +30,8 @@ public final class PalaceServer {
 
 	private static volatile Vault vault;
 	private static volatile NoteLocations locations;
-	private static volatile NoteAccess.Visibility visibility = NoteAccess.Visibility.EVERYONE;
+	// 世界设置的笔记可见性；null = 这个世界没设置过，用配置文件里的默认值
+	private static volatile NoteAccess.Visibility worldVisibility;
 	// 每 2 秒在后台看一眼哪些笔记文件在外部被改过，按文件刷新权限（见 Vault.refreshChanged）
 	private static final long REFRESH_EVERY_MS = 2_000;
 	private static volatile ScheduledExecutorService refresher;
@@ -38,6 +39,7 @@ public final class PalaceServer {
 	private PalaceServer() {}
 
 	public static void register() {
+		ServerLifecycleEvents.SERVER_STARTING.register(server -> PalaceConfig.load());
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			Path worldDir = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
 			Path root = worldDir.resolve(VAULT_DIR);
@@ -45,7 +47,7 @@ public final class PalaceServer {
 				Vault v = new Vault(root);
 				writeWelcomeNoteIfEmpty(root);
 				v.scan();
-				visibility = loadVisibility(root);
+				worldVisibility = loadVisibility(root);
 				vault = v;
 				locations = new NoteLocations(root.resolve(".palace").resolve("locations.tsv"));
 				MemoryPalace.LOGGER.info("笔记库已打开：{}（{} 篇笔记）", v.root(), v.list().size());
@@ -63,7 +65,7 @@ public final class PalaceServer {
 			}
 			vault = null;
 			locations = null;
-			visibility = NoteAccess.Visibility.EVERYONE;
+			worldVisibility = null;
 		});
 	}
 
@@ -80,9 +82,13 @@ public final class PalaceServer {
 		refresher = r;
 	}
 
-	/** 世界设置"笔记可见性"：没写 palace-read 的笔记谁能读。存在 .palace/settings.properties。 */
+	/**
+	 * "笔记可见性"：没写 palace-read 的笔记谁能读。世界设置过（/palace visibility，存在 .palace/settings.properties）
+	 * 就用世界的，否则用配置文件里的 default_visibility。
+	 */
 	public static NoteAccess.Visibility visibility() {
-		return visibility;
+		NoteAccess.Visibility world = worldVisibility;
+		return world != null ? world : PalaceConfig.get().defaultVisibility();
 	}
 
 	public static void setVisibility(NoteAccess.Visibility value) throws IOException {
@@ -112,7 +118,7 @@ public final class PalaceServer {
 		} finally {
 			Files.deleteIfExists(tmp);
 		}
-		visibility = value;
+		worldVisibility = value;
 	}
 
 	private static final String VISIBILITY_KEY = "visibility";
@@ -121,20 +127,21 @@ public final class PalaceServer {
 		return root.resolve(".palace").resolve("settings.properties");
 	}
 
-	// 读不出来就用默认值"所有人可读"，并记一条日志
+	// 没设置过、或者读不出来（记一条日志）：返回 null，用配置文件里的默认值
 	private static NoteAccess.Visibility loadVisibility(Path root) {
 		Path file = settingsFile(root);
 		if (!Files.exists(file)) {
-			return NoteAccess.Visibility.EVERYONE;
+			return null;
 		}
 		Properties props = new Properties();
 		try (var in = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
 			props.load(in);
 		} catch (IOException | IllegalArgumentException e) {
-			MemoryPalace.LOGGER.warn("读取世界设置失败，笔记可见性按默认（所有人可读）", e);
-			return NoteAccess.Visibility.EVERYONE;
+			MemoryPalace.LOGGER.warn("读取世界设置失败，笔记可见性按配置文件的默认值", e);
+			return null;
 		}
-		return NoteAccess.Visibility.parse(props.getProperty(VISIBILITY_KEY));
+		String value = props.getProperty(VISIBILITY_KEY);
+		return value == null ? null : NoteAccess.Visibility.parse(value);
 	}
 
 	/** 当前世界的笔记库；世界没开或打开失败时为 null。 */

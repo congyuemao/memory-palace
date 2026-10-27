@@ -52,7 +52,13 @@ public final class NoteAccess {
 	}
 
 	/** 正在访问的人。admin = 本机房主或者服务器管理员（OP）。 */
-	public record Who(UUID player, boolean admin) {}
+	public record Who(UUID player, boolean admin) {
+		/** 没有身份：多人总开关关着时的其他玩家。什么都读不了、改不了，连 everyone 的笔记也不行。 */
+		public static final Who NOBODY = new Who(null, false);
+	}
+
+	/** 分享给别人的权限：只读，或者能改（能改的人也能读）。 */
+	public enum Level { READ, EDIT }
 
 	/**
 	 * 一篇笔记的权限设置。
@@ -86,6 +92,9 @@ public final class NoteAccess {
 
 	/** 是不是作者（无主笔记的作者是管理员）。 */
 	public static boolean isOwner(Rules rules, Who who) {
+		if (who.player() == null) {
+			return false;
+		}
 		return rules.owner() == null ? who.admin() : rules.owner().equals(who.player());
 	}
 
@@ -93,6 +102,9 @@ public final class NoteAccess {
 	 * @param ownerOnly 收件箱或加密笔记：只有作者能碰
 	 */
 	public static boolean canRead(Rules rules, boolean ownerOnly, Who who, Visibility visibility) {
+		if (who.player() == null) {
+			return false;
+		}
 		if (isOwner(rules, who)) {
 			return true;
 		}
@@ -106,10 +118,70 @@ public final class NoteAccess {
 	}
 
 	public static boolean canEdit(Rules rules, boolean ownerOnly, Who who) {
+		if (who.player() == null) {
+			return false;
+		}
 		if (isOwner(rules, who)) {
 			return true;
 		}
 		return !ownerOnly && listed(rules.edit(), who);
+	}
+
+	/**
+	 * 把 target（玩家 UUID，或 Rules.EVERYONE_ID 表示所有人）加进名单，返回新的设置。
+	 * - EDIT：加进 palace-edit（能改的人也能读）
+	 * - READ：加进 palace-read。原来没写 palace-read、世界又是"所有人可读"时，这篇本来就人人能读，不改
+	 *   （写上名单反而会把它从"人人可读"变成"只有名单上的人"）
+	 */
+	public static Rules share(Rules rules, UUID target, Level level, Visibility visibility) {
+		if (level == Level.EDIT) {
+			Set<UUID> edit = new LinkedHashSet<>(rules.edit());
+			edit.add(target);
+			return new Rules(rules.owner(), rules.read(), edit);
+		}
+		if (rules.read() == null && visibility == Visibility.EVERYONE) {
+			return rules;
+		}
+		Set<UUID> read = rules.read() == null ? new LinkedHashSet<>() : new LinkedHashSet<>(rules.read());
+		read.add(target);
+		return new Rules(rules.owner(), read, rules.edit());
+	}
+
+	/**
+	 * 把 target 从 palace-read 和 palace-edit 里去掉，返回新的设置。
+	 * target 是 EVERYONE_ID、而这篇原来是跟着世界"所有人可读"的：写一个空的 palace-read，让它变成私有。
+	 * 注意：这篇如果还对所有人公开（名单里有 everyone），单独去掉某个人之后他仍然能读——没有"黑名单"，调用方要提示。
+	 */
+	public static Rules unshare(Rules rules, UUID target, Visibility visibility) {
+		Set<UUID> edit = new LinkedHashSet<>(rules.edit());
+		edit.remove(target);
+		Set<UUID> read;
+		if (rules.read() != null) {
+			read = new LinkedHashSet<>(rules.read());
+			read.remove(target);
+		} else {
+			read = Rules.EVERYONE_ID.equals(target) && visibility == Visibility.EVERYONE ? Set.of() : null;
+		}
+		return new Rules(rules.owner(), read, edit);
+	}
+
+	/**
+	 * 写回 front matter 的字段：palace-read（null = 删掉这一行，跟着世界设置）和 palace-edit（没人 = 删掉这一行）。
+	 * 名单里有 everyone 就只写 everyone。palace-owner 不在这里改。
+	 */
+	public static Map<String, String> fields(Rules rules) {
+		Map<String, String> out = new java.util.LinkedHashMap<>();
+		out.put(READ_KEY, rules.read() == null ? null : format(rules.read()));
+		out.put(EDIT_KEY, rules.edit().isEmpty() ? null : format(rules.edit()));
+		return out;
+	}
+
+	private static String format(Set<UUID> list) {
+		if (list.contains(Rules.EVERYONE_ID)) {
+			return EVERYONE;
+		}
+		// 空名单写成 YAML 的 []，Obsidian 等也认
+		return list.isEmpty() ? "[]" : String.join(", ", list.stream().map(UUID::toString).toList());
 	}
 
 	/** 笔记书上、准星提示里能不能用正文标题：世界里每个人都能读的笔记才可以，否则标题本身就是泄露。 */

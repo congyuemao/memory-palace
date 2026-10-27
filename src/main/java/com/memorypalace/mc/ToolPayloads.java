@@ -229,8 +229,8 @@ public final class ToolPayloads {
 
 	private static void look(ServerPlayer player, LookQuery query) {
 		String text = "";
-		// 用原版的方块交互距离（和右键能够到的范围一致），而不是固定半径
-		if (player.isWithinBlockInteractionRange(query.pos(), 1.0)) {
+		// 用原版的方块交互距离（和右键能够到的范围一致），而不是固定半径；多人关着时其他玩家什么都不显示
+		if (PalaceAccess.enabled(player) && player.isWithinBlockInteractionRange(query.pos(), 1.0)) {
 			ItemStack book = switch (player.level().getBlockEntity(query.pos())) {
 				case ChiseledBookShelfBlockEntity shelf when query.slot() >= 0 && query.slot() < 6 -> shelf.getItem(query.slot());
 				case LecternBlockEntity lectern when query.slot() == NoteLocations.LECTERN_SLOT -> lectern.getBook();
@@ -250,7 +250,7 @@ public final class ToolPayloads {
 	 * 读不了、标题也不是人人可见的笔记：和书名一样只有"【私密笔记】#7f3a"，不带路径（见 NoteBooks.titleFor）。
 	 */
 	private static String label(NoteSummary note, boolean canRead) {
-		if (!canRead && (note.encrypted() || !note.titleIsPublic(PalaceServer.visibility()))) {
+		if (!canRead && (note.encrypted() || !PalaceAccess.titleIsPublic(note))) {
 			return NoteBooks.titleFor(note); // 读不了：和书名一样，只有"【加密笔记】#7f3a"这种，不带路径
 		}
 		if (note.encrypted()) {

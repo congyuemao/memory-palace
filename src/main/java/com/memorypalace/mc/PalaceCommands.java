@@ -28,7 +28,11 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.LecternBlockEntity;
 import net.minecraft.util.Prediction;
 
+import net.minecraft.commands.arguments.GameProfileArgument;
+import net.minecraft.server.players.NameAndId;
+
 import java.io.IOException;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,17 +53,34 @@ public final class PalaceCommands {
 				// 每个子命令自己决定谁能用；用不了的子命令连补全都看不到
 				dispatcher.register(Commands.literal("palace")
 						.requires(source -> source.getPlayer() != null)
-						// 领书、新建、重扫、改可见性：管理员
+						// 领书、新建、分享：有对应权限节点的人（默认所有人；多人总开关关着时只有房主）
 						.then(Commands.literal("give")
-								.requires(PalaceCommands::admin)
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.GIVE))
 								.then(Commands.argument("path", StringArgumentType.greedyString())
-										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(suggestions(), builder))
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(suggestions(ctx.getSource()), builder))
 										.executes(PalaceCommands::give)))
-						.then(Commands.literal("rescan").requires(PalaceCommands::admin).executes(PalaceCommands::rescan))
 						.then(Commands.literal("new")
-								.requires(PalaceCommands::admin)
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
 								.then(Commands.argument("path", StringArgumentType.greedyString())
 										.executes(ctx -> create(ctx, false))))
+						// 笔记写在最后（路径里可以有空格、中文、斜杠，只有放在最后才能整段读进来）
+						.then(Commands.literal("share")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.SHARE))
+								.then(Commands.literal("everyone")
+										.then(shareLevel("read", NoteAccess.Level.READ, true))
+										.then(shareLevel("edit", NoteAccess.Level.EDIT, true)))
+								.then(Commands.argument("player", GameProfileArgument.gameProfile())
+										.then(shareLevel("read", NoteAccess.Level.READ, false))
+										.then(shareLevel("edit", NoteAccess.Level.EDIT, false))))
+						.then(Commands.literal("unshare")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.SHARE))
+								.then(Commands.literal("everyone")
+										.then(ownedNoteArgument().executes(ctx -> unshare(ctx, true))))
+								.then(Commands.argument("player", GameProfileArgument.gameProfile())
+										.then(ownedNoteArgument().executes(ctx -> unshare(ctx, false)))))
+						// 重扫、改可见性、重读配置：管理员
+						.then(Commands.literal("rescan").requires(PalaceCommands::admin).executes(PalaceCommands::rescan))
+						.then(Commands.literal("reload").requires(PalaceCommands::admin).executes(PalaceCommands::reload))
 						.then(Commands.literal("visibility")
 								.requires(PalaceCommands::admin)
 								.executes(PalaceCommands::showVisibility)
@@ -93,6 +114,17 @@ public final class PalaceCommands {
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
 										.executes(PalaceCommands::where)))));
+	}
+
+	private static com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> shareLevel(
+			String name, NoteAccess.Level level, boolean everyone) {
+		return Commands.literal(name).then(ownedNoteArgument().executes(ctx -> share(ctx, level, everyone)));
+	}
+
+	// 分享命令的笔记参数：补全只列自己能分享的（自己是作者、不是加密笔记或收件箱）
+	private static com.mojang.brigadier.builder.RequiredArgumentBuilder<CommandSourceStack, String> ownedNoteArgument() {
+		return Commands.argument("note", StringArgumentType.greedyString())
+				.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(ownedSuggestions(ctx.getSource()), builder));
 	}
 
 	private static boolean admin(CommandSourceStack source) {
@@ -189,6 +221,9 @@ public final class PalaceCommands {
 	/**
 	 * /palace new &lt;文件夹/文件名&gt;：新建笔记，给一本笔记书，并直接打开游戏内编辑器。
 	 * /palace newsecret：同上，但先加密（客户端会要求解锁或第一次设置密码）。
+	 * - 房主：建在输入的位置，不写作者（和单人时代的笔记一样，归管理员）
+	 * - 其他管理员：建在输入的位置，作者是自己
+	 * - 普通玩家：建在自己的个人区 players/&lt;UUID&gt;/ 下，作者是自己，受配置文件里的篇数上限限制
 	 */
 	private static int create(CommandContext<CommandSourceStack> ctx, boolean secret) throws CommandSyntaxException {
 		Vault vault = requireVault(ctx);
@@ -200,11 +235,23 @@ public final class PalaceCommands {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.crypto_denied"));
 			return 0;
 		}
-		String path = StringArgumentType.getString(ctx, "path").strip();
+		boolean admin = PalaceAccess.admin(player);
+		if (!admin && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
+		int maxNotes = PalaceConfig.get().maxNotesPerPlayer();
+		if (!admin && maxNotes > 0 && vault.list().stream().filter(n -> player.getUUID().equals(n.access().owner())).count() >= maxNotes) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.quota_notes", maxNotes));
+			return 0;
+		}
+		String input = StringArgumentType.getString(ctx, "path").strip();
+		String path = admin ? input : personalFolder(player) + "/" + input;
+		UUID owner = PalaceAccess.isHost(player) ? null : player.getUUID();
 		NoteSummary note;
 		String body;
 		try {
-			note = vault.createNote(path, "");
+			note = vault.createNote(path, "", owner);
 			body = vault.readBody(note.id()).orElse("");
 		} catch (IllegalArgumentException e) {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.new_failed", e.getMessage()));
@@ -238,7 +285,7 @@ public final class PalaceCommands {
 		}
 		String path = StringArgumentType.getString(ctx, "note").strip();
 		// 读不了的笔记当作不存在：不透露"有这么一篇、放在哪里"
-		Optional<NoteSummary> note = vault.resolve(path).filter(n -> readable(ctx.getSource(), n));
+		Optional<NoteSummary> note = resolveNote(vault, ctx.getSource().getPlayer(), path).filter(n -> readable(ctx.getSource(), n));
 		if (note.isEmpty()) {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
 			return 0;
@@ -361,9 +408,21 @@ public final class PalaceCommands {
 		}
 		String path = StringArgumentType.getString(ctx, "path").strip();
 		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		boolean admin = PalaceAccess.admin(player);
+		if (!admin && !GIVE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
 
-		Optional<NoteSummary> single = vault.resolve(path);
-		List<NoteSummary> notes = single.map(List::of).orElseGet(() -> vault.listFolder(path));
+		// 管理员领什么都行（比如替别人布置书架）；其他人只能领自己读得了的，读不了的当作不存在
+		Optional<NoteSummary> single = resolveNote(vault, player, path).filter(n -> admin || PalaceAccess.canRead(player, n));
+		List<NoteSummary> notes = single.map(List::of).orElseGet(() -> {
+			List<NoteSummary> folder = vault.listFolder(path);
+			if (folder.isEmpty() && !admin) {
+				folder = vault.listFolder(personalFolder(player) + "/" + path);
+			}
+			return folder.stream().filter(n -> admin || PalaceAccess.canRead(player, n)).toList();
+		});
 		if (notes.isEmpty()) {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
 			return 0;
@@ -410,6 +469,186 @@ public final class PalaceCommands {
 		return vault.list().size();
 	}
 
+	/**
+	 * /palace share &lt;玩家|everyone&gt; read|edit &lt;笔记&gt;：只有作者能分享；加密笔记和收件箱不能分享（只有作者能碰）。
+	 * 写进笔记 front matter 的 palace-read / palace-edit（玩家记 UUID，改名不受影响）。
+	 */
+	private static int share(CommandContext<CommandSourceStack> ctx, NoteAccess.Level level, boolean everyone) throws CommandSyntaxException {
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		Collection<NameAndId> targets = everyone ? List.of() : GameProfileArgument.getGameProfiles(ctx, "player");
+		Optional<NoteSummary> note = ownedNote(ctx, player);
+		if (note.isEmpty()) {
+			return 0;
+		}
+		List<UUID> ids = everyone ? List.of(NoteAccess.Rules.EVERYONE_ID)
+				: targets.stream().map(NameAndId::id).filter(id -> !id.equals(player.getUUID())).toList();
+		if (ids.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.share_self"));
+			return 0;
+		}
+		NoteAccess.Visibility visibility = PalaceServer.visibility();
+		if (!changeAccess(ctx, player, note.get(), rules -> {
+			for (UUID id : ids) {
+				rules = NoteAccess.share(rules, id, level, visibility);
+			}
+			return rules;
+		})) {
+			return 0;
+		}
+		Component who = everyone ? Component.translatable("command.memorypalace.everyone") : names(targets, player);
+		ctx.getSource().sendSuccess(() -> Component.translatable(level == NoteAccess.Level.EDIT
+				? "command.memorypalace.shared_edit" : "command.memorypalace.shared_read", note.get().title(), who), false);
+		NoteSummary now = PalaceServer.vault().find(note.get().id()).orElse(note.get());
+		if (level == NoteAccess.Level.READ && now.access().read() == null) {
+			// 没写 palace-read、世界又是"所有人可读"：本来就人人能读，名单没改
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.already_public"), false);
+		}
+		// 告诉在线的被分享者一声（他们现在读得了，说出标题不算泄露）
+		for (NameAndId target : targets) {
+			ServerPlayer online = ctx.getSource().getServer().getPlayerList().getPlayer(target.id());
+			if (online != null && online != player) {
+				online.sendSystemMessage(Component.translatable("command.memorypalace.shared_with_you",
+						player.getName(), note.get().title(), noteCommandPath(now)));
+			}
+		}
+		return ids.size();
+	}
+
+	/** /palace unshare &lt;玩家|everyone&gt; &lt;笔记&gt;：从 palace-read 和 palace-edit 里去掉。 */
+	private static int unshare(CommandContext<CommandSourceStack> ctx, boolean everyone) throws CommandSyntaxException {
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		Collection<NameAndId> targets = everyone ? List.of() : GameProfileArgument.getGameProfiles(ctx, "player");
+		Optional<NoteSummary> note = ownedNote(ctx, player);
+		if (note.isEmpty()) {
+			return 0;
+		}
+		List<UUID> ids = everyone ? List.of(NoteAccess.Rules.EVERYONE_ID) : targets.stream().map(NameAndId::id).toList();
+		NoteAccess.Visibility visibility = PalaceServer.visibility();
+		if (!changeAccess(ctx, player, note.get(), rules -> {
+			for (UUID id : ids) {
+				rules = NoteAccess.unshare(rules, id, visibility);
+			}
+			return rules;
+		})) {
+			return 0;
+		}
+		Component who = everyone ? Component.translatable("command.memorypalace.everyone") : names(targets, null);
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.unshared", note.get().title(), who), false);
+		// 没有"黑名单"：这篇还对所有人公开的话，单独去掉的人照样能读，要说清楚
+		NoteSummary now = PalaceServer.vault().find(note.get().id()).orElse(note.get());
+		boolean stillPublic = NoteAccess.titleIsPublic(now.access(), now.ownerOnly(), visibility);
+		if (!everyone && stillPublic) {
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.still_public"), false);
+		}
+		return 1;
+	}
+
+	/** 分享命令要的笔记：自己读得了、自己是作者、不是加密笔记或收件箱。不满足时已经发了提示，返回 empty。 */
+	private static Optional<NoteSummary> ownedNote(CommandContext<CommandSourceStack> ctx, ServerPlayer player) {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return Optional.empty();
+		}
+		String path = StringArgumentType.getString(ctx, "note").strip();
+		Optional<NoteSummary> note = resolveNote(vault, player, path).filter(n -> PalaceAccess.canRead(player, n));
+		if (note.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
+			return Optional.empty();
+		}
+		if (note.get().ownerOnly()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.share_owner_only"));
+			return Optional.empty();
+		}
+		if (!NoteAccess.isOwner(note.get().access(), PalaceAccess.who(player))) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.share_not_owner", note.get().title()));
+			return Optional.empty();
+		}
+		if (!PalaceAccess.admin(player) && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return Optional.empty();
+		}
+		return note;
+	}
+
+	// 改分享名单；写入那一刻按文件重新检查一次"还是作者、还能分享"（文件可能刚在外部被改过）
+	private static boolean changeAccess(CommandContext<CommandSourceStack> ctx, ServerPlayer player, NoteSummary note,
+			java.util.function.UnaryOperator<NoteAccess.Rules> change) {
+		NoteAccess.Who who = PalaceAccess.who(player);
+		try {
+			Vault.WriteResult result = PalaceServer.vault().updateAccess(note.id(), change,
+					fresh -> !fresh.ownerOnly() && NoteAccess.isOwner(fresh.access(), who));
+			switch (result) {
+				case OK -> {
+					return true;
+				}
+				case DENIED -> ctx.getSource().sendFailure(Component.translatable("command.memorypalace.share_not_owner", note.title()));
+				default -> ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", note.relativePath()));
+			}
+		} catch (IOException | RuntimeException e) {
+			MemoryPalace.LOGGER.error("修改笔记 {} 的分享设置失败", note.id(), e);
+			ctx.getSource().sendFailure(Component.translatable("message.memorypalace.read_failed"));
+		}
+		return false;
+	}
+
+	private static Component names(Collection<NameAndId> targets, ServerPlayer except) {
+		return Component.literal(String.join(", ", targets.stream()
+				.filter(t -> except == null || !t.id().equals(except.getUUID())).map(NameAndId::name).toList()));
+	}
+
+	// 聊天里给出的笔记路径（去掉 .md），对方可以直接 /palace give 它
+	private static String noteCommandPath(NoteSummary note) {
+		return note.relativePath().substring(0, note.relativePath().length() - 3);
+	}
+
+	/** /palace reload：重读 config/memorypalace-server.toml，并把命令列表重新发给在线玩家（能用的命令可能变了）。 */
+	private static int reload(CommandContext<CommandSourceStack> ctx) {
+		PalaceConfig.load();
+		MinecraftServer server = ctx.getSource().getServer();
+		for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+			server.getCommands().sendCommands(online);
+		}
+		PalaceConfig.Settings s = PalaceConfig.get();
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.reloaded",
+				Component.translatable(s.multiplayer() ? "command.memorypalace.on" : "command.memorypalace.off")), true);
+		return 1;
+	}
+
+	/** 放玩家个人区的文件夹。 */
+	static final String PLAYERS_FOLDER = "players";
+
+	/** 普通玩家的个人区：players/&lt;UUID&gt;。用 UUID 不用名字：名字可以改。 */
+	static String personalFolder(ServerPlayer player) {
+		return PLAYERS_FOLDER + "/" + player.getUUID();
+	}
+
+	/** 按路径找笔记：先在自己的个人区里找（普通玩家输入的路径都相对个人区），找不到再按整个笔记库的路径找。 */
+	private static Optional<NoteSummary> resolveNote(Vault vault, ServerPlayer player, String path) {
+		if (player != null) {
+			Optional<NoteSummary> mine = vault.resolve(personalFolder(player) + "/" + path);
+			if (mine.isPresent()) {
+				return mine;
+			}
+		}
+		return vault.resolve(path);
+	}
+
+	// /palace share、unshare 的补全：自己能分享的笔记
+	private static List<String> ownedSuggestions(CommandSourceStack source) {
+		Vault vault = PalaceServer.vault();
+		ServerPlayer player = source.getPlayer();
+		if (vault == null || player == null) {
+			return List.of();
+		}
+		NoteAccess.Who who = PalaceAccess.who(player);
+		return vault.list().stream().filter(n -> !n.ownerOnly() && NoteAccess.isOwner(n.access(), who))
+				.map(PalaceCommands::noteCommandPath).toList();
+	}
+
+	// 普通玩家新建、分享：每人每秒 1 次、最多连着 5 次；领书：每 2 秒 1 次、最多连着 4 次（一次最多 36 本）
+	private static final RateLimiter WRITE_RATE = new RateLimiter(1, 5);
+	private static final RateLimiter GIVE_RATE = new RateLimiter(0.5, 4);
+
 	private static Vault requireVault(CommandContext<CommandSourceStack> ctx) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
@@ -418,14 +657,18 @@ public final class PalaceCommands {
 		return vault;
 	}
 
-	// 补全：所有笔记路径（去掉 .md）+ 所有文件夹
-	private static List<String> suggestions() {
+	// 补全：笔记路径（去掉 .md）+ 它们所在的文件夹。管理员看到全部；其他人只看到自己读得了的（文件夹名也不多透露）
+	private static List<String> suggestions(CommandSourceStack source) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			return List.of();
 		}
+		boolean admin = admin(source);
 		var out = new java.util.TreeSet<String>();
 		for (NoteSummary note : vault.list()) {
+			if (!admin && !readable(source, note)) {
+				continue;
+			}
 			String p = note.relativePath();
 			out.add(p.substring(0, p.length() - 3));
 			if (!note.folder().isEmpty()) {
