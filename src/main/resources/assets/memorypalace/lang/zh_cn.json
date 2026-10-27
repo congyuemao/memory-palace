@@ -10,6 +10,7 @@
 	"command.memorypalace.list_header": "共 %s 篇笔记：",
 	"command.memorypalace.rescanned": "重新扫描完成，共 %s 篇笔记",
 	"command.memorypalace.reloaded": "已重新读取配置，多人：%s",
+	"command.memorypalace.reload_failed": "配置文件 %s 读取失败，已改用默认设置（多人关闭），详情见服务器日志",
 	"command.memorypalace.on": "开启",
 	"command.memorypalace.off": "关闭",
 	"command.memorypalace.created": "已新建笔记 %s，对应的笔记书已放入背包",

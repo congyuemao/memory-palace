@@ -172,8 +172,15 @@ public final class PalaceInteractions {
 		level.gameEvent(player, GameEvent.BLOCK_CHANGE, pos);
 	}
 
+	// 打开笔记（右键、找笔记里点开）：每人每秒 2 次、最多连着 8 次。每次都要读文件、把整篇发回去，
+	// 不限速的话一个几十字节的请求就能换来几百 KB 的读盘和发送
+	private static final RateLimiter OPEN_RATE = new RateLimiter(2, 8);
+
 	/** @return 打开成功（读得了、发出去了） */
 	public static boolean openNote(ServerPlayer player, UUID id) {
+		if (!PalaceAccess.isHost(player) && !OPEN_RATE.tryTake(player.getUUID())) {
+			return false;
+		}
 		if (sendNote(player, id, false)) {
 			NoteWatcher.watch(player, id);
 			return true;
@@ -196,6 +203,14 @@ public final class PalaceInteractions {
 		if (!PalaceAccess.enabled(player)) {
 			if (!refresh) {
 				player.sendSystemMessage(Component.translatable("message.memorypalace.multiplayer_off"));
+			}
+			return false;
+		}
+		// 先按索引里的卡片挡掉明显读不了的（每 2 秒按文件刷新一次），免得别人的笔记也要整篇读一遍才拒绝；
+		// 卡片说读得了，下面 readNote 还会按文件此刻的内容再查一次
+		if (vault.find(id).filter(n -> PalaceAccess.canRead(player, n)).isEmpty()) {
+			if (!refresh) {
+				player.sendSystemMessage(Component.translatable("message.memorypalace.note_unavailable"));
 			}
 			return false;
 		}

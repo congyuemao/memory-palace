@@ -57,8 +57,16 @@ public final class PalaceAccess {
 		return player != null && allowed(player, node);
 	}
 
+	/**
+	 * 无主笔记（单人时代的笔记、房主建的笔记、收件箱）算谁的：有房主的世界只算房主的；
+	 * 专用服务器上没有房主，算管理员的。局域网里被授予 memorypalace.admin 的人管得了命令，但读不到房主的笔记。
+	 */
 	public static NoteAccess.Who who(ServerPlayer player) {
-		return enabled(player) ? new NoteAccess.Who(player.getUUID(), admin(player)) : NoteAccess.Who.NOBODY;
+		if (!enabled(player)) {
+			return NoteAccess.Who.NOBODY;
+		}
+		boolean ownsOrphans = isHost(player) || player.level().getServer().isDedicatedServer() && admin(player);
+		return new NoteAccess.Who(player.getUUID(), ownsOrphans);
 	}
 
 	public static boolean canRead(ServerPlayer player, NoteSummary note) {
@@ -70,11 +78,13 @@ public final class PalaceAccess {
 	}
 
 	/**
-	 * 书名、准星提示能不能用正文标题。多人关着时只有房主在用，和以前一样显示（收件箱、加密笔记除外）；
-	 * 多人开着时只有世界里人人能读的笔记才显示。
+	 * 书名、准星提示能不能用正文标题。书是物品，谁拿到都能看书名、书页，和多人总开关无关
+	 * （总开关关着时，局域网访客也能从书架上把书取走）。所以：
+	 * - 纯单人游戏（没开放局域网）：只有房主，和以前一样显示（收件箱、加密笔记除外）
+	 * - 只要可能有别人（开放了局域网、专用服务器）：只有世界里人人能读的笔记才显示
 	 */
 	public static boolean titleIsPublic(NoteSummary note) {
-		return PalaceConfig.get().multiplayer() ? note.titleIsPublic(PalaceServer.visibility()) : !note.ownerOnly();
+		return PalaceServer.othersCanJoin() ? note.titleIsPublic(PalaceServer.visibility()) : !note.ownerOnly();
 	}
 
 	/** 管理员才能做的事，不是管理员时顺便告诉原因。 */

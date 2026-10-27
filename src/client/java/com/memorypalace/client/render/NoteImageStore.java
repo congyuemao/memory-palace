@@ -2,6 +2,7 @@ package com.memorypalace.client.render;
 
 import com.memorypalace.core.render.NoteImages;
 import com.memorypalace.mc.ImagePayloads;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 import java.util.HashMap;
@@ -16,6 +17,8 @@ public final class NoteImageStore {
 	public enum State { LOADING, READY, FAILED }
 
 	private static final Map<String, State> STATES = new HashMap<>();
+	// 最多记这么多张图的状态（正常远到不了）；断线时清空
+	private static final int MAX_STATES = 512;
 	private static Runnable onArrive = () -> {};
 
 	private NoteImageStore() {}
@@ -32,6 +35,11 @@ public final class NoteImageStore {
 			state = null; // 贴图被缓存挤掉了，重新要
 		}
 		if (state == null) {
+			// 一篇正文里可能塞了成千上万个不同的图片引用（正文可能来自不怀好意的服务端）：
+			// 状态表满了就不再请求新图，显示成失败，不让请求和状态无限增长
+			if (STATES.size() >= MAX_STATES) {
+				return State.FAILED;
+			}
 			STATES.put(key, State.LOADING);
 			ClientPlayNetworking.send(new ImagePayloads.Request(noteId, src));
 			return State.LOADING;
@@ -61,13 +69,14 @@ public final class NoteImageStore {
 				return;
 			}
 			var raster = payload.png().length == 0 ? null : NoteImages.fromBytes(payload.png()).orElse(null);
-			if (raster == null) {
+			if (raster == null || RasterTextures.put(key, raster, 0) == null) {
 				STATES.put(key, State.FAILED);
 			} else {
-				RasterTextures.put(key, raster, 0);
 				STATES.put(key, State.READY);
 			}
 			onArrive.run();
 		});
+		// 换服务器、退出世界：上一个服务器的图片状态全部作废
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> STATES.clear());
 	}
 }

@@ -282,8 +282,9 @@ class NoteAccessTest {
 	void visibilityParsing() {
 		assertEquals(PRIVATE, Visibility.parse(" Private "));
 		assertEquals(EVERYONE, Visibility.parse("everyone"));
-		assertEquals(EVERYONE, Visibility.parse(null));
-		assertEquals(EVERYONE, Visibility.parse("乱写"));
+		assertEquals(EVERYONE, Visibility.parse(" Everyone "));
+		assertEquals(PRIVATE, Visibility.parse(null), "认不出来按更安全的私有");
+		assertEquals(PRIVATE, Visibility.parse("乱写"), "认不出来按更安全的私有");
 	}
 
 	@Test

@@ -140,6 +140,11 @@ public final class ImagePayloads {
 			}
 			Path parent = root.relativize(file.get().toAbsolutePath().normalize()).getParent();
 			String folder = parent == null ? "" : parent.toString().replace('\\', '/');
+			// 图片要和引用它的笔记在同一个区域：同一个玩家的个人区，或者都不在任何个人区里。
+			// 否则玩家 A 在自己笔记里写 ![](players/<B>/图.png)，就能拿到 B 个人区里的图
+			if (!personalArea(folder).equals(personalArea(read.get().note().folder()))) {
+				return new byte[0];
+			}
 			if (!folderReadable(vault, folder, who, visibility)) {
 				return new byte[0];
 			}
@@ -190,9 +195,15 @@ public final class ImagePayloads {
 		return body.contains("](" + src) || body.contains("](<" + src) || body.contains("[[" + src);
 	}
 
-	/** 有没有 ".." 这一级（也认 URL 编码的 %2e%2e：NoteImages 会先解码再找文件）。 */
+	/** 有没有 ".." 这一级。和 NoteImages.resolve 一样先做 URL 解码（%2e%2e%2f 解出来就是 ../），再检查。 */
 	private static boolean hasParentSegment(String src) {
-		String s = src.replace('\\', '/').toLowerCase(java.util.Locale.ROOT).replace("%2e", ".");
+		String s = src;
+		try {
+			s = java.net.URLDecoder.decode(src.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8);
+		} catch (IllegalArgumentException ignored) {
+			// 不完整的百分号编码：NoteImages 也按原样找，这里按原样检查
+		}
+		s = s.replace('\\', '/').toLowerCase(java.util.Locale.ROOT).replace("%2e", ".");
 		for (String part : s.split("/")) {
 			if (part.equals("..")) {
 				return true;

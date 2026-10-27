@@ -12,11 +12,11 @@ import java.util.UUID;
  * <p>
  * front matter 里的字段（都可以省略）：
  * <pre>
- * palace-owner: &lt;玩家 UUID&gt;                   作者。省略 = 无主笔记（单人时代的笔记都是），归管理员
+ * palace-owner: &lt;玩家 UUID&gt;                   作者。省略 = 无主笔记（单人时代的笔记都是），归房主（专用服务器上归管理员）
  * palace-read:  everyone | &lt;UUID&gt;, &lt;UUID&gt; …     谁能读。省略时看世界设置"笔记可见性"
  * palace-edit:  everyone | &lt;UUID&gt;, &lt;UUID&gt; …     作者之外谁能改（能改的人也能读）。省略时只有作者
  * </pre>
- * 规则（"作者"对无主笔记来说就是管理员）：
+ * 规则（"作者"对无主笔记来说就是房主，专用服务器上是管理员）：
  * - 作者能读能改
  * - 收件箱和加密笔记只有作者能碰，不看 palace-read / palace-edit，也不受可见性影响
  *   （收件箱永远私有；加密笔记的钥匙只在作者手里，分享以后靠单篇密码）
@@ -41,9 +41,9 @@ public final class NoteAccess {
 		/** 只有作者能读，要给别人看就写 palace-read。适合人杂的服务器。 */
 		PRIVATE;
 
-		/** "everyone" / "private"，不区分大小写；认不出来时用默认值 EVERYONE。 */
+		/** "everyone" / "private"，不区分大小写；认不出来（写错、文件损坏）时按更安全的 PRIVATE。 */
 		public static Visibility parse(String value) {
-			return value != null && value.strip().toLowerCase(Locale.ROOT).equals("private") ? PRIVATE : EVERYONE;
+			return value != null && value.strip().toLowerCase(Locale.ROOT).equals("everyone") ? EVERYONE : PRIVATE;
 		}
 
 		public String id() {
@@ -51,7 +51,10 @@ public final class NoteAccess {
 		}
 	}
 
-	/** 正在访问的人。admin = 本机房主或者服务器管理员（OP）。 */
+	/**
+	 * 正在访问的人。admin = 无主笔记算不算他的：有本机房主的世界（单人、局域网）只有房主是；
+	 * 专用服务器上没有房主，才归管理员（OP）。不能让局域网里被授予管理权限的人读到房主的无主笔记和收件箱。
+	 */
 	public record Who(UUID player, boolean admin) {
 		/** 没有身份：多人总开关关着时的其他玩家。什么都读不了、改不了，连 everyone 的笔记也不行。 */
 		public static final Who NOBODY = new Who(null, false);

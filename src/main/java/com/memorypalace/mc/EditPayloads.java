@@ -116,9 +116,25 @@ public final class EditPayloads {
 			reply(player, chunk, "ERROR", "");
 			return;
 		}
+		// 普通玩家：块数不能超过字数上限需要的块数（每人同时只有一份在收，最多占这么多内存），挡住"发几百块、永远不发最后一块"
+		int maxChars = PalaceConfig.get().maxNoteChars();
+		boolean admin = PalaceAccess.admin(player);
+		// （客户端为了不切开 emoji，一块可能少 1 个字，所以按 CHUNK_CHARS - 1 算）
+		if (!admin && maxChars > 0 && chunk.total() > maxChars / (CHUNK_CHARS - 1) + 1) {
+			PENDING.remove(player.getUUID());
+			reply(player, chunk, "TOO_LONG", "");
+			return;
+		}
 		Assembly a = PENDING.get(player.getUUID());
 		// 新的一次保存（或者上次没发完就又保存了）：重新开始收
 		if (a == null || a.session() != chunk.session() || !a.noteId().equals(chunk.noteId()) || a.parts().length != chunk.total()) {
+			// 保存限速：每人每秒 1 次、最多连着 10 次（手动保存远到不了）。在开始收的时候就扣，
+			// 不停换 session 的小包也会被挡住，不会一直重新分配缓冲区
+			if (!SAVE_RATE.tryTake(player.getUUID())) {
+				PENDING.remove(player.getUUID());
+				reply(player, chunk, "BUSY", "");
+				return;
+			}
 			a = new Assembly(chunk.noteId(), chunk.session(), chunk.expectedHash(), new String[chunk.total()]);
 			PENDING.put(player.getUUID(), a);
 		}
@@ -129,15 +145,9 @@ public final class EditPayloads {
 			}
 		}
 		PENDING.remove(player.getUUID());
-		// 保存限速：每人每秒 1 次、最多连着 10 次（手动保存远到不了），挡住刷保存包反复写盘
-		if (!SAVE_RATE.tryTake(player.getUUID())) {
-			reply(player, chunk, "BUSY", "");
-			return;
-		}
 		String body = String.join("", a.parts());
 		// 普通玩家一篇最多多少字（配置文件 max_note_chars），挡住把服务器硬盘写满；管理员不限
-		int maxChars = PalaceConfig.get().maxNoteChars();
-		if (maxChars > 0 && body.length() > maxChars && !PalaceAccess.admin(player)) {
+		if (maxChars > 0 && body.length() > maxChars && !admin) {
 			reply(player, chunk, "TOO_LONG", "");
 			return;
 		}

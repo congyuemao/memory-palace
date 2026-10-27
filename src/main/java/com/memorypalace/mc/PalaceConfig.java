@@ -44,8 +44,11 @@ public final class PalaceConfig {
 		return current;
 	}
 
-	/** 读配置文件；读不了就保留现在的设置（第一次读失败 = 默认值，多人关闭）。 */
-	public static synchronized void load() {
+	/**
+	 * 读配置文件。读不了（文件写坏了等）就退回默认值——多人关闭：管理员想关多人却把文件改坏了，不能让多人继续开着。
+	 * @return 读成功了没有
+	 */
+	public static synchronized boolean load() {
 		Path file = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
 		ConfigSpec spec = new ConfigSpec();
 		Settings d = Settings.DEFAULTS;
@@ -76,8 +79,11 @@ public final class PalaceConfig {
 					NoteAccess.Visibility.parse(config.get(DEFAULT_VISIBILITY)),
 					config.getInt(MAX_NOTES), config.getInt(MAX_CHARS));
 			MemoryPalace.LOGGER.info("已读取 {}：多人 {}", file, current.multiplayer() ? "开启" : "关闭");
+			return true;
 		} catch (RuntimeException e) {
-			MemoryPalace.LOGGER.error("读取配置 {} 失败，沿用当前设置（多人：{}）", file, current.multiplayer() ? "开启" : "关闭", e);
+			current = Settings.DEFAULTS;
+			MemoryPalace.LOGGER.error("读取配置 {} 失败，改用默认设置（多人关闭）", file, e);
+			return false;
 		}
 	}
 

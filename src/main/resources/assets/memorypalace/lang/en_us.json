@@ -10,6 +10,7 @@
 	"command.memorypalace.list_header": "%s note(s):",
 	"command.memorypalace.rescanned": "Rescan done, %s note(s)",
 	"command.memorypalace.reloaded": "Configuration reloaded, multiplayer: %s",
+	"command.memorypalace.reload_failed": "Could not read config file %s; using default settings (multiplayer off). See the server log for details",
 	"command.memorypalace.on": "on",
 	"command.memorypalace.off": "off",
 	"command.memorypalace.created": "Created note %s, the note book is in your inventory",

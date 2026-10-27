@@ -70,6 +70,17 @@ class MathRendererTest {
 	}
 
 	@Test
+	void refusesOverlongAndOversizedFormulasBeforeAllocating() {
+		var tooLong = MathRenderer.render("x".repeat(MathRenderer.MAX_TEX_CHARS + 1), false, 20, BLACK);
+		assertFalse(tooLong.ok(), "超长公式直接拒绝");
+		assertTrue(MathRenderer.render("x".repeat(MathRenderer.MAX_TEX_CHARS), false, 1, BLACK).ok(), "刚好在上限内的照常渲染");
+		// 字号很大时位图会超过边长上限：不分配，返回错误
+		var huge = MathRenderer.render("\\sum_{i=1}^{n} i", true, 5000, BLACK);
+		assertFalse(huge.ok(), "位图超过上限时拒绝");
+		assertNotNull(huge.error());
+	}
+
+	@Test
 	void errorsDoNotThrow() {
 		for (String bad : new String[]{"\\frac{1}", "\\notacommand{x}", "", "   ", null}) {
 			var result = assertDoesNotThrow(() -> MathRenderer.render(bad, false, 20, BLACK));

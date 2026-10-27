@@ -603,10 +603,14 @@ public final class PalaceCommands {
 
 	/** /palace reload：重读 config/memorypalace-server.toml，并把命令列表重新发给在线玩家（能用的命令可能变了）。 */
 	private static int reload(CommandContext<CommandSourceStack> ctx) {
-		PalaceConfig.load();
+		boolean ok = PalaceConfig.load();
 		MinecraftServer server = ctx.getSource().getServer();
 		for (ServerPlayer online : server.getPlayerList().getPlayers()) {
 			server.getCommands().sendCommands(online);
+		}
+		if (!ok) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.reload_failed", PalaceConfig.FILE_NAME));
+			return 0;
 		}
 		PalaceConfig.Settings s = PalaceConfig.get();
 		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.reloaded",

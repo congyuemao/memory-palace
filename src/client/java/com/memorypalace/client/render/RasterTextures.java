@@ -47,7 +47,14 @@ public final class RasterTextures {
 		return put(key, raster, depth);
 	}
 
+	/** 单张最多这么多像素（和公式位图上限一样），超过的不建贴图，返回 null：在分配显存之前就挡住。 */
+	private static final long MAX_SINGLE_PIXELS = 4L * 1024 * 1024;
+
+	/** @return 新贴图；位图太大时返回 null（不缓存） */
 	public static Tex put(String key, Raster raster, int depth) {
+		if ((long) raster.width() * raster.height() > MAX_SINGLE_PIXELS) {
+			return null;
+		}
 		NativeImage image = new NativeImage(raster.width(), raster.height(), false);
 		for (int y = 0; y < raster.height(); y++) {
 			for (int x = 0; x < raster.width(); x++) {

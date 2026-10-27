@@ -14,6 +14,11 @@ import org.scilab.forge.jlatexmath.TeXParser;
  */
 public final class MathRenderer {
 	private static final Object RENDER_LOCK = new Object();
+	/** 一个公式最多这么多字（正常的公式远到不了），挡住超长公式把解析和排版卡死。 */
+	public static final int MAX_TEX_CHARS = 4000;
+	/** 位图最大边长和总像素（约 16MB），在分配之前检查：正文可能来自不怀好意的服务端。 */
+	public static final int MAX_SIDE = 4096;
+	public static final long MAX_PIXELS = 4L * 1024 * 1024;
 
 	private MathRenderer() {}
 
@@ -45,6 +50,9 @@ public final class MathRenderer {
 		if (!Float.isFinite(pixelSize) || pixelSize <= 0) {
 			return new Result(null, 0, "字号必须是有限正数");
 		}
+		if (tex.length() > MAX_TEX_CHARS) {
+			return new Result(null, 0, "公式太长（超过 " + MAX_TEX_CHARS + " 字）");
+		}
 		// JLaTeXMath 的字体缓存和宏表是共享的，解析和绘制都放在锁内。
 		synchronized (RENDER_LOCK) {
 			try {
@@ -55,6 +63,9 @@ public final class MathRenderer {
 				icon.setForeground(new Color(color, true));
 				int width = Math.addExact(icon.getIconWidth(), 2);
 				int height = Math.addExact(icon.getIconHeight(), 2);
+				if (width > MAX_SIDE || height > MAX_SIDE || (long) width * height > MAX_PIXELS) {
+					return new Result(null, 0, "公式太大（" + width + "×" + height + " 像素）");
+				}
 				var image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
 				var graphics = image.createGraphics();
 				try {

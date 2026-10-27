@@ -7,6 +7,7 @@ import com.memorypalace.core.vault.Vault;
 import com.memorypalace.core.vault.VaultBackup;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
@@ -30,6 +31,7 @@ public final class PalaceServer {
 
 	private static volatile Vault vault;
 	private static volatile NoteLocations locations;
+	private static volatile MinecraftServer server;
 	// 世界设置的笔记可见性；null = 这个世界没设置过，用配置文件里的默认值
 	private static volatile NoteAccess.Visibility worldVisibility;
 	// 每 2 秒在后台看一眼哪些笔记文件在外部被改过，按文件刷新权限（见 Vault.refreshChanged）
@@ -41,6 +43,7 @@ public final class PalaceServer {
 	public static void register() {
 		ServerLifecycleEvents.SERVER_STARTING.register(server -> PalaceConfig.load());
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			PalaceServer.server = server;
 			Path worldDir = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
 			Path root = worldDir.resolve(VAULT_DIR);
 			try {
@@ -66,6 +69,7 @@ public final class PalaceServer {
 			vault = null;
 			locations = null;
 			worldVisibility = null;
+			PalaceServer.server = null;
 		});
 	}
 
@@ -142,6 +146,12 @@ public final class PalaceServer {
 		}
 		String value = props.getProperty(VISIBILITY_KEY);
 		return value == null ? null : NoteAccess.Visibility.parse(value);
+	}
+
+	/** 除了房主还可能有别人：开放到了局域网，或者是专用服务器（不知道时也当作有）。 */
+	public static boolean othersCanJoin() {
+		MinecraftServer s = server;
+		return s == null || s.isDedicatedServer() || s.isPublished();
 	}
 
 	/** 当前世界的笔记库；世界没开或打开失败时为 null。 */

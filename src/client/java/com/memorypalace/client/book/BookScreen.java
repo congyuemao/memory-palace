@@ -242,6 +242,9 @@ public abstract class BookScreen extends Screen {
 					return null;
 				}
 				t = RasterTextures.put(key, result.raster(), result.depth());
+				if (t == null) {
+					return null;
+				}
 			}
 			return new BookLayout.Box(t.id(), t.rasterW(), t.rasterH(), t.depth(), px);
 		}
