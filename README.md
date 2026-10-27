@@ -21,7 +21,7 @@
 - 笔记库就是一个普通文件夹，可以直接用 Obsidian、Typora 打开编辑，游戏里即时刷新。
 - 备份笔记 = 备份一个文件夹。
 
-Inspired by ins@aamanda.li's meme reel.
+Inspired by [ins@aamanda.li](https://www.instagram.com/aamanda.li)'s [meme reel](https://www.instagram.com/reel/Dd4gs6UTB0w/).
 
 ## 功能
 
