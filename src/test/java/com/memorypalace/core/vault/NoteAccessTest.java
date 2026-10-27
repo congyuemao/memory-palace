@@ -248,9 +248,10 @@ class NoteAccessTest {
 	}
 
 	@Test
-	void fieldsCollapseMixedEveryoneLists() {
+	void fieldsKeepIndividualsAlongsideEveryone() {
 		Rules r = rules("palace-read", BOB + ", everyone, " + ALICE, "palace-edit", CAROL + ", everyone");
-		assertEquals(Map.of(NoteAccess.READ_KEY, "everyone", NoteAccess.EDIT_KEY, "everyone"), NoteAccess.fields(r));
+		assertEquals(Map.of(NoteAccess.READ_KEY, BOB + ", everyone, " + ALICE, NoteAccess.EDIT_KEY, CAROL + ", everyone"),
+				NoteAccess.fields(r), "单独授权的人不能被 everyone 吞掉，否则取消公开时会一起丢");
 	}
 
 	@Test
@@ -261,7 +262,8 @@ class NoteAccessTest {
 				rules("palace-edit", BOB.toString()),
 				rules("palace-read", BOB.toString()),
 				rules("palace-read", BOB + ", " + ALICE, "palace-edit", CAROL + ", " + BOB),
-				rules("palace-read", "everyone", "palace-edit", "everyone")}) {
+				rules("palace-read", "everyone", "palace-edit", "everyone"),
+				rules("palace-read", BOB + ", everyone", "palace-edit", "everyone, " + CAROL)}) {
 			Map<String, String> fields = new java.util.LinkedHashMap<>(NoteAccess.fields(r));
 			fields.values().removeIf(value -> value == null);
 			assertEquals(r, NoteAccess.parse(fields), "往返后保留缺省、空名单和显式名单的区别：" + r);

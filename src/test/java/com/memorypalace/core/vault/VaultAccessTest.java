@@ -142,6 +142,49 @@ class VaultAccessTest {
 		assertEquals(prefix + "palace-owner: " + ALICE + "\npalace-read: " + BOB + "\n---\n# 合写\n内容", read("合写.md"));
 	}
 
+	private static final UUID CAROL = UUID.fromString("33333333-3333-3333-3333-333333333333");
+
+	/**
+	 * 回归：先单独授权 BOB、再公开给 everyone、最后取消 everyone（或者先公开、再授权 BOB、最后取消公开），
+	 * BOB 的单独授权不能丢。每一步都经 updateAccess 写进文件，最后换一个新的 Vault 从硬盘重新读。
+	 */
+	@Test
+	void individualGrantsSurviveRevokingEveryoneThroughDisk() throws IOException {
+		for (NoteAccess.Level level : NoteAccess.Level.values()) {
+			for (boolean individualFirst : new boolean[]{true, false}) {
+				Path sub = Files.createDirectories(dir.resolve(level + "-" + individualFirst));
+				UUID id = UUID.randomUUID();
+				Files.writeString(sub.resolve("合写.md"), "---\npalace-id: " + id + "\npalace-owner: " + ALICE
+						+ "\n---\n# 合写\n内容", StandardCharsets.UTF_8);
+				var vault = new Vault(sub);
+				vault.scan();
+				var visibility = NoteAccess.Visibility.PRIVATE;
+				java.util.List<UUID> order = individualFirst ? java.util.List.of(BOB, Rules.EVERYONE_ID)
+						: java.util.List.of(Rules.EVERYONE_ID, BOB);
+				for (UUID target : order) {
+					assertEquals(WriteResult.OK, vault.updateAccess(id, r -> NoteAccess.share(r, target, level, visibility), n -> true));
+				}
+				assertEquals(WriteResult.OK, vault.updateAccess(id,
+						r -> NoteAccess.unshare(r, Rules.EVERYONE_ID, visibility), n -> true));
+
+				var reread = new Vault(sub);
+				reread.scan();
+				NoteSummary note = reread.find(id).orElseThrow();
+				String what = level + (individualFirst ? "，先单独授权" : "，先公开");
+				var bob = new NoteAccess.Who(BOB, false);
+				var carol = new NoteAccess.Who(CAROL, false);
+				assertTrue(note.canRead(bob, visibility), "BOB 的单独授权还在：" + what);
+				assertEquals(level == NoteAccess.Level.EDIT, note.canEdit(bob), "BOB 的编辑权限照旧：" + what);
+				assertFalse(note.canRead(carol, visibility), "取消公开后，没授权的人读不了：" + what);
+				assertFalse(note.canEdit(carol), "取消公开后，没授权的人改不了：" + what);
+				Set<UUID> expected = Set.of(BOB);
+				assertEquals(level == NoteAccess.Level.READ ? expected : null, note.access().read(),
+						"阅读名单保留缺省（null）和显式名单的区别：" + what);
+				assertEquals(level == NoteAccess.Level.EDIT ? expected : Set.of(), note.access().edit(), what);
+			}
+		}
+	}
+
 	@Test
 	void updateAccessRemovesReadAndEditFields() throws IOException {
 		UUID id = UUID.randomUUID();

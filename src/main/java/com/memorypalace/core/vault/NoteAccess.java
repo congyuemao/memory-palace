@@ -170,7 +170,8 @@ public final class NoteAccess {
 
 	/**
 	 * 写回 front matter 的字段：palace-read（null = 删掉这一行，跟着世界设置）和 palace-edit（没人 = 删掉这一行）。
-	 * 名单里有 everyone 就只写 everyone。palace-owner 不在这里改。
+	 * 名单里的 everyone 和单独授权的玩家都照写（"everyone, &lt;UUID&gt;"）：只写 everyone 的话，
+	 * 之后 unshare everyone 时单独授权的人也跟着丢了。palace-owner 不在这里改。
 	 */
 	public static Map<String, String> fields(Rules rules) {
 		Map<String, String> out = new java.util.LinkedHashMap<>();
@@ -180,11 +181,9 @@ public final class NoteAccess {
 	}
 
 	private static String format(Set<UUID> list) {
-		if (list.contains(Rules.EVERYONE_ID)) {
-			return EVERYONE;
-		}
 		// 空名单写成 YAML 的 []，Obsidian 等也认
-		return list.isEmpty() ? "[]" : String.join(", ", list.stream().map(UUID::toString).toList());
+		return list.isEmpty() ? "[]" : String.join(", ", list.stream()
+				.map(id -> Rules.EVERYONE_ID.equals(id) ? EVERYONE : id.toString()).toList());
 	}
 
 	/** 笔记书上、准星提示里能不能用正文标题：世界里每个人都能读的笔记才可以，否则标题本身就是泄露。 */
