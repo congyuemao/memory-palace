@@ -7,6 +7,7 @@ import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.NoteSaver;
 import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.crypto.WrongKeyException;
+import com.memorypalace.core.editor.UndoHistory;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.EditPayloads;
 import com.memorypalace.mc.OpenNotePayload;
@@ -15,10 +16,13 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.MultiLineEditBox;
+import net.minecraft.client.gui.components.MultilineTextField;
+import net.minecraft.client.gui.components.Whence;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
@@ -26,7 +30,7 @@ import java.util.UUID;
 
 /**
  * 游戏内编辑器：还是那本摊开的书，左页直接在纸上写 Markdown，右页实时预览。
- * Ctrl+S 保存；有没保存的修改时按 Esc 会先确认。保存时如果文件在外部被改过，会提示冲突而不是悄悄覆盖。
+ * Ctrl+S 保存，Ctrl+Z 撤销，Ctrl+Y / Ctrl+Shift+Z 重做；有没保存的修改时按 Esc 会先确认。保存时如果文件在外部被改过，会提示冲突而不是悄悄覆盖。
  * 加密笔记：保存前在客户端加密，服务端只收到密文。
  */
 public class EditorScreen extends BookScreen {
@@ -47,6 +51,10 @@ public class EditorScreen extends BookScreen {
 	private boolean saving;
 	private Component status = Component.empty();
 
+	// 撤销 / 重做历史；重新 init（改窗口大小）时不丢
+	private final UndoHistory history;
+	private boolean applyingHistory;
+
 	public EditorScreen(UUID noteId, Component title, String body) {
 		this(noteId, title, body, false, Vault.hash(body));
 	}
@@ -59,6 +67,7 @@ public class EditorScreen extends BookScreen {
 		if (encrypted) {
 			restoreDraft();
 		}
+		this.history = new UndoHistory(this.text);
 	}
 
 	/** 上次上锁前有没保存成功的草稿：解密后放回编辑框（标记为未保存）。 */
@@ -102,6 +111,9 @@ public class EditorScreen extends BookScreen {
 			text = value;
 			previewDirty = true;
 			lastEdit = System.currentTimeMillis();
+			if (!applyingHistory) {
+				history.changed(value, lastEdit);
+			}
 		});
 		addRenderableWidget(editBox);
 		setInitialFocus(editBox);
@@ -249,12 +261,62 @@ public class EditorScreen extends BookScreen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		// Ctrl+S（Mac 上是 Cmd+S）保存
-		if (event.key() == InputConstants.KEY_S && event.hasControlDownWithQuirk()) {
-			save(false);
-			return true;
+		if (event.hasControlDownWithQuirk()) {
+			// Ctrl+S（Mac 上是 Cmd+S）保存；Ctrl+Z 撤销；Ctrl+Y 或 Ctrl+Shift+Z 重做
+			switch (event.key()) {
+				case InputConstants.KEY_S -> {
+					save(false);
+					return true;
+				}
+				case InputConstants.KEY_Z -> {
+					apply(event.hasShiftDown() ? history.redo() : history.undo());
+					return true;
+				}
+				case InputConstants.KEY_Y -> {
+					apply(history.redo());
+					return true;
+				}
+				default -> {
+				}
+			}
 		}
 		return super.keyPressed(event);
+	}
+
+	// ---- 撤销 / 重做 ----
+
+	// 原版多行输入框没有公开光标位置：用反射拿到里面的 MultilineTextField 来挪光标（26.x 起不混淆，字段名就是 textField）。
+	// 拿不到就算了，光标留在末尾，撤销本身不受影响
+	private static final Field TEXT_FIELD = findTextField();
+
+	private static Field findTextField() {
+		try {
+			Field field = MultiLineEditBox.class.getDeclaredField("textField");
+			field.setAccessible(true);
+			return field;
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	/** 把编辑框恢复成历史里的某个版本；state 为 null（没得撤销/重做）时什么都不做。 */
+	private void apply(UndoHistory.State state) {
+		if (state == null || editBox == null) {
+			return;
+		}
+		applyingHistory = true;
+		try {
+			editBox.setValue(state.text(), true);
+		} finally {
+			applyingHistory = false;
+		}
+		if (TEXT_FIELD != null) {
+			try {
+				((MultilineTextField) TEXT_FIELD.get(editBox)).seekCursor(Whence.ABSOLUTE, Math.clamp(state.cursor(), 0, text.length()));
+			} catch (ReflectiveOperationException | RuntimeException e) {
+				// 挪不了光标就留在末尾
+			}
+		}
 	}
 
 	// ---- 绘制 ----
