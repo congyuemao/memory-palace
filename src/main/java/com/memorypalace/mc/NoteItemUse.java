@@ -2,6 +2,10 @@ package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.crypto.Ciphertext;
+import com.memorypalace.core.crypto.KeyRing;
+import com.memorypalace.core.vault.CopyJobs;
+import com.memorypalace.core.vault.FolderCopy;
+import com.memorypalace.core.vault.FolderLocks;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
@@ -100,33 +104,196 @@ final class NoteItemUse {
 				player.sendSystemMessage(Component.translatable("message.memorypalace.encryption_mismatch"));
 				return;
 			}
-			if (encrypted && (!CryptoPayloads.allowed(player) || body.length() > CryptoPayloads.MAX_ACTION_BODY * 4)) {
-				player.sendSystemMessage(Component.translatable(CryptoPayloads.allowed(player)
-						? "command.memorypalace.crypto_too_long" : "command.memorypalace.crypto_denied", CryptoPayloads.MAX_ACTION_BODY));
+			if (encrypted && !CryptoPayloads.allowed(player)) {
+				player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_denied"));
+				return;
+			}
+			// 上次抄进被锁文件夹没抄完（取消了、保存失败）：按服务端自己的记录接着抄，或者抄好了就换成笔记书。
+			// 物品上只有记录 ID（可以伪造）：查不到、不是自己的、原笔记对不上的一律当没有，另建一篇
+			Optional<UUID> jobId = NoteItems.copyJob(stack);
+			CopyJobs jobs = PalaceServer.copyJobs();
+			if (jobId.isPresent()) {
+				Optional<CopyJobs.Job> job = jobs == null ? Optional.empty() : jobs.find(jobId.get(), player.getUUID());
+				if (job.isPresent() && !job.get().source().equals(sourceId)) {
+					// 记录在，原笔记却对不上（物品被改过）：记录也作废，删不掉就先别另建
+					try {
+						jobs.finish(job.get().id());
+					} catch (IOException e) {
+						player.sendSystemMessage(Component.translatable("message.memorypalace.read_failed"));
+						return;
+					}
+					job = Optional.empty();
+				}
+				if (job.isEmpty()) {
+					NoteItems.clearCopyJob(stack);
+				} else if (continueCopy(player, stack, vault, job.get(), body, encrypted)) {
+					return;
+				}
+			}
+			// 要整篇发给客户端的（加密笔记、抄进被锁文件夹的）才受消息大小限制；普通文件夹里的明文由服务端直接复制
+			boolean viaClient = encrypted || targetLocked(vault, player);
+			if (viaClient && body.length() > CryptoPayloads.MAX_ACTION_BODY * 4) {
+				player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
 				return;
 			}
 			String file = sourceNote.relativePath().substring(sourceNote.relativePath().lastIndexOf('/') + 1);
 			String base = "抄本/" + file.substring(0, file.length() - 3) + " 抄本";
 			String name = freeName(vault, player, base);
-			// 加密笔记先建一篇空的（默认标题），内容等客户端加密好再存
+			// 加密笔记先建一篇空的（默认标题），内容等客户端加密好再存；被锁的文件夹里 createNote 也只建空的
 			Optional<PalaceCommands.Created> created = PalaceCommands.createNote(player, name, encrypted ? "" : body, false,
 					player::sendSystemMessage);
 			if (created.isEmpty()) {
 				return;
 			}
 			NoteSummary note = created.get().note();
-			replace(player, stack, note);
-			if (encrypted) {
-				// "原笔记ID:原密文"：客户端用自己的钥匙解开原笔记（密文绑定原 ID），再按新笔记的 ID 加密
-				CryptoPayloads.sendAction(player, note.id(), "copy_encrypted", note.title(), sourceId + ":" + body);
-			} else if (created.get().lockedFolder().isPresent()) {
-				// 抄到了被锁的文件夹里：不能先存明文，只建了一篇空的
-				player.sendSystemMessage(Component.translatable("message.memorypalace.copy_into_locked_folder"));
-				PalaceCommands.openCreated(player, created.get(), false);
+			if (created.get().lockedFolder().isPresent()) {
+				// 抄进了被锁的文件夹：不能先存明文。物品先不换，记下目标；原正文交给客户端用文件夹钥匙加密后存进去，
+				// 存好了（afterSave）才换成笔记书、说抄好了
+				Optional<String> lockId = currentLockId(vault, note);
+				if (!CryptoPayloads.allowed(player) || jobs == null || lockId.isEmpty()) {
+					player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_denied"));
+					return;
+				}
+				String placeholderHash = Vault.hash(created.get().body());
+				CopyJobs.Job job = jobs.start(player.getUUID(), sourceId, note.id(), placeholderHash, lockId.get());
+				NoteItems.setCopyJob(stack, job.id());
+				sendFolderCopy(player, note, sourceId, placeholderHash, body);
+			} else {
+				replace(player, stack, note);
+				if (encrypted) {
+					// "原笔记ID:原密文"：客户端用自己的钥匙解开原笔记（密文绑定原 ID），再按新笔记的 ID 加密
+					CryptoPayloads.sendAction(player, note.id(), "copy_encrypted", note.title(), sourceId + ":" + body);
+				}
 			}
 			MemoryPalace.LOGGER.info("{} 抄写了笔记 {} → {}", player.getName().getString(), sourceNote.relativePath(), note.relativePath());
 		} catch (IOException e) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.read_failed"));
+		}
+	}
+
+	/** 把原笔记正文发给客户端，让它用目标文件夹的钥匙按目标 ID 加密后存进去（保存时核对占位正文的指纹）。 */
+	private static void sendFolderCopy(ServerPlayer player, NoteSummary target, UUID sourceId, String placeholderHash, String body) {
+		if (CryptoPayloads.sendAction(player, target.id(), "copy_into_folder", target.title(), FolderCopy.pack(sourceId, placeholderHash, body))) {
+			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_encrypting", target.relativePath()));
+		} else {
+			player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
+		}
+	}
+
+	/**
+	 * 按服务端的抄写记录接着做。@return 处理了（换了笔记书，或者又发了一次加密请求）；false = 这条记录作废了，调用方另建一篇
+	 */
+	private static boolean continueCopy(ServerPlayer player, ItemStack stack, Vault vault, CopyJobs.Job job, String body,
+			boolean encrypted) throws IOException {
+		Optional<Vault.Read> target = vault.readNote(job.target());
+		boolean owned = target.isPresent() && NoteAccess.isOwner(target.get().note().access(), PalaceAccess.who(player));
+		Optional<String> lockNow = target.flatMap(t -> currentLockId(vault, t.note()));
+		FolderCopy.Next next = FolderCopy.next(target, job.placeholderHash(), owned, job.lockId());
+		if (next == FolderCopy.Next.FINISH && lockNow.filter(job.lockId()::equals).isPresent()) {
+			finishCopy(player, stack, target.get().note(), job);
+			return true;
+		}
+		if (next == FolderCopy.Next.RESEND) {
+			if (lockNow.isPresent()) {
+				// 文件夹还锁着（而且是建目标时那把锁）：只能让客户端加密。Vault.writeBody 自己不管文件夹锁，绝不能在这里写明文
+				if (lockNow.get().equals(job.lockId())) {
+					if (!CryptoPayloads.allowed(player)) {
+						player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_denied"));
+						return true;
+					}
+					sendFolderCopy(player, target.get().note(), job.source(), job.placeholderHash(), body);
+					return true;
+				}
+			} else if (!encrypted && vault.writeBody(job.target(), body, job.placeholderHash(),
+					n -> NoteAccess.isOwner(n.access(), PalaceAccess.who(player)) && FolderLocks.lockedFolderOf(vault, n).isEmpty())
+					== Vault.WriteResult.OK) {
+				// 文件夹的密码已经解除了：不用加密，直接把正文抄进去（只在它还是占位的样子、还没上锁时写）
+				Optional<NoteSummary> written = vault.find(job.target());
+				if (written.isPresent()) {
+					finishCopy(player, stack, written.get(), job);
+					return true;
+				}
+			}
+		} else if (target.isPresent() && owned) {
+			// 目标被外部改过（或者换了锁）：不动它，另建一篇
+			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_target_changed"));
+		}
+		PalaceServer.copyJobs().finish(job.id());
+		NoteItems.clearCopyJob(stack);
+		return false;
+	}
+
+	/** 这篇笔记所在的被锁文件夹现在的锁 ID；不在被锁的文件夹里、读不出锁 → empty。 */
+	private static Optional<String> currentLockId(Vault vault, NoteSummary note) {
+		try {
+			Optional<String> folder = FolderLocks.lockedFolderOf(vault, note);
+			if (folder.isEmpty()) {
+				return Optional.empty();
+			}
+			return FolderLocks.read(vault, folder.get()).map(KeyRing::folderId);
+		} catch (IOException | IllegalArgumentException e) {
+			return Optional.empty();
+		}
+	}
+
+	/** 抄本会建在哪个文件夹（"抄本/"，普通玩家在自己的个人区里）现在是不是上了锁。 */
+	private static boolean targetLocked(Vault vault, ServerPlayer player) {
+		String folder = (PalaceAccess.admin(player) ? "" : PalaceCommands.personalFolder(player) + "/") + "抄本";
+		try {
+			return FolderLocks.lockedFolder(vault, folder).isPresent();
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+	}
+
+	/**
+	 * 抄好了：先删掉记录（删不掉就什么都不给，提示重试——记录还在的话同一条记录还能再换一次书），
+	 * 再把抄本用掉一本、换成目标笔记的笔记书；同一叠剩下的不再记着这条记录。
+	 */
+	private static void finishCopy(ServerPlayer player, ItemStack stack, NoteSummary target, CopyJobs.Job job) {
+		try {
+			PalaceServer.copyJobs().finish(job.id());
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.warn("删除抄写记录失败", e);
+			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_retry"));
+			return;
+		}
+		stack.consume(1, player);
+		NoteItems.clearCopyJob(stack);
+		player.getInventory().placeItemBackInInventory(NoteBooks.create(target), Prediction.SERVER_ONLY);
+		player.sendSystemMessage(Component.translatable("message.memorypalace.copy_done", target.relativePath()));
+	}
+
+	/**
+	 * 一篇笔记保存成功之后（EditPayloads 调用）：只有这三样都对得上才算抄好——
+	 * 服务端记着这个人正往这篇里抄、这次保存之前的正文正是登记的占位（previousHash）、存进去的是只有登记那把文件夹锁的密文，
+	 * 而且那把锁就是文件夹现在的锁。然后在这个人身上找到那本抄本换成笔记书；没找到（扔了、放箱子里了）就等下次右键它时补上。
+	 */
+	static void afterSave(ServerPlayer player, UUID noteId, String body, String previousHash) {
+		CopyJobs jobs = PalaceServer.copyJobs();
+		Vault vault = PalaceServer.vault();
+		if (jobs == null || vault == null || previousHash == null || previousHash.isEmpty()) {
+			return;
+		}
+		try {
+			Optional<CopyJobs.Job> job = jobs.byTarget(noteId, player.getUUID());
+			if (job.isEmpty() || !job.get().placeholderHash().equals(previousHash) || !FolderCopy.sealedWith(body, job.get().lockId())) {
+				return;
+			}
+			Optional<NoteSummary> note = vault.find(noteId);
+			if (note.isEmpty() || currentLockId(vault, note.get()).filter(job.get().lockId()::equals).isEmpty()) {
+				return;
+			}
+			var inventory = player.getInventory();
+			for (int i = 0; i < inventory.getContainerSize(); i++) {
+				ItemStack stack = inventory.getItem(i);
+				if (NoteItems.copyJob(stack).filter(job.get().id()::equals).isPresent()) {
+					finishCopy(player, stack, note.get(), job.get());
+					return;
+				}
+			}
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.warn("读取抄写记录失败", e);
 		}
 	}
 

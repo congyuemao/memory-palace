@@ -110,6 +110,40 @@ public final class NoteItems {
 		});
 	}
 
+	// ---- 抄进被锁文件夹（见 FolderCopy） ----
+
+	/**
+	 * 抄写中的记录 ID（服务端 CopyJobs 里的那一条）；不在抄写中 → empty。
+	 * 只是个"去服务端查哪条"的号码：物品数据可以伪造，目标、指纹等一律以服务端的记录为准。
+	 */
+	public static Optional<UUID> copyJob(ItemStack stack) {
+		CompoundTag tag = tag(stack);
+		if (!flag(tag, "blank")) {
+			return Optional.empty();
+		}
+		return tag.getString("copy_job").flatMap(s -> {
+			try {
+				return Optional.of(UUID.fromString(s));
+			} catch (IllegalArgumentException e) {
+				return Optional.empty();
+			}
+		});
+	}
+
+	/** 记下"正在按这条记录抄写"（物品不消耗，抄好了才换成笔记书；中途取消可以再右键接着抄）。 */
+	static void setCopyJob(ItemStack stack, UUID job) {
+		update(stack, data -> data.putString("copy_job", job.toString()));
+		stack.set(DataComponents.LORE, lore("抄写中：内容要用文件夹密码加密后才算抄好", "没抄完可以再右键继续"));
+	}
+
+	static void clearCopyJob(ItemStack stack) {
+		if (stack.isEmpty() || copyJob(stack).isEmpty()) {
+			return;
+		}
+		update(stack, data -> data.remove("copy_job"));
+		stack.set(DataComponents.LORE, lore("右键：把原笔记抄成一篇独立的新笔记", "（只有读得了原笔记的人能抄）"));
+	}
+
 	// ---- 待上锁 ----
 
 	public static boolean pendingLock(ItemStack stack) {

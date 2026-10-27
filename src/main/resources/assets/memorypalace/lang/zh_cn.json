@@ -283,7 +283,11 @@
 	"message.memorypalace.restored": "已还原。还原前的内容留在历史版本里（/palace history）",
 	"message.memorypalace.create_denied": "你没有新建笔记的权限",
 	"message.memorypalace.too_long_to_copy": "原笔记太长（超过 %s 字），抄不了",
-	"message.memorypalace.copy_into_locked_folder": "抄本所在的文件夹设了密码，只建好了一篇空笔记，内容没有抄过去",
+	"message.memorypalace.copy_encrypting": "抄本 %s 在设了密码的文件夹里，内容要用文件夹密码加密后才算抄好。取消了的话，再右键抄本可以接着抄",
+	"message.memorypalace.copy_done": "已抄好：%s",
+	"message.memorypalace.copy_retry": "还没抄好：内容没有存进去。再右键抄本可以重试",
+	"message.memorypalace.copy_conflict": "没抄进去：目标笔记在外面被改过，没有覆盖它。再右键抄本会另建一篇",
+	"message.memorypalace.copy_target_changed": "上次的抄写目标被改过了，不覆盖它，另建一篇",
 	"message.memorypalace.lock_owner_only": "只有作者能给这篇笔记上锁，先按普通笔记打开",
 	"message.memorypalace.copied_encrypted": "已抄写：新笔记用你的保险库密码加密",
 	"message.memorypalace.lock_in_progress": "正在给这篇上锁，请在弹出的窗口里完成（30 秒后可以再试）"

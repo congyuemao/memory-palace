@@ -207,6 +207,9 @@ public final class EditPayloads {
 							&& (bodyEncrypted || mayDecrypt || FolderLocks.lockedFolderOf(vault, note).isEmpty()),
 					restore);
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
+			if (result == Vault.WriteResult.OK) {
+				NoteItemUse.afterSave(player, chunk.noteId(), body, guard); // 抄进被锁文件夹的抄本：存好了才换成笔记书
+			}
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);
 			reply(player, chunk, "ERROR", "");

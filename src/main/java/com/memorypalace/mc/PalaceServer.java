@@ -1,6 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.vault.CopyJobs;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.NoteHistory;
@@ -32,6 +33,7 @@ public final class PalaceServer {
 
 	private static volatile Vault vault;
 	private static volatile NoteLocations locations;
+	private static volatile CopyJobs copyJobs;
 	private static volatile MinecraftServer server;
 	// 世界设置的笔记可见性；null = 这个世界没设置过，用配置文件里的默认值
 	private static volatile NoteAccess.Visibility worldVisibility;
@@ -55,6 +57,7 @@ public final class PalaceServer {
 				worldVisibility = loadVisibility(root);
 				vault = v;
 				locations = new NoteLocations(root.resolve(".palace").resolve("locations.tsv"));
+				copyJobs = new CopyJobs(root.resolve(".palace").resolve("copy-jobs.tsv"));
 				MemoryPalace.LOGGER.info("笔记库已打开：{}（{} 篇笔记）", v.root(), v.list().size());
 				startRefresher(v);
 				backupInBackground(root, worldDir.getFileName().toString());
@@ -70,6 +73,7 @@ public final class PalaceServer {
 			}
 			vault = null;
 			locations = null;
+			copyJobs = null;
 			worldVisibility = null;
 			PalaceServer.server = null;
 		});
@@ -162,6 +166,11 @@ public final class PalaceServer {
 	}
 
 	/** 当前世界的笔记位置记录；世界没开时为 null。 */
+	/** 抄进被锁文件夹的进行中记录（见 CopyJobs）；笔记库没打开时为 null。 */
+	public static CopyJobs copyJobs() {
+		return copyJobs;
+	}
+
 	public static NoteLocations locations() {
 		return locations;
 	}

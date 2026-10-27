@@ -283,7 +283,11 @@
 	"message.memorypalace.restored": "Restored. The previous content is kept in history (/palace history)",
 	"message.memorypalace.create_denied": "You don't have permission to create notes",
 	"message.memorypalace.too_long_to_copy": "The original note is too long (over %s characters) to copy",
-	"message.memorypalace.copy_into_locked_folder": "The copy's folder is password-protected, so only an empty note was created; the content was not copied",
+	"message.memorypalace.copy_encrypting": "The copy %s is in a password-protected folder; it is only done once the content is encrypted with the folder password. If you cancel, right-click the copy again to continue",
+	"message.memorypalace.copy_done": "Copied: %s",
+	"message.memorypalace.copy_retry": "Not copied yet: the content was not saved. Right-click the copy again to retry",
+	"message.memorypalace.copy_conflict": "Not copied: the target note was changed outside the game and was not overwritten. Right-click the copy again to create a new one",
+	"message.memorypalace.copy_target_changed": "The previous copy target was changed, so it is left alone and a new one is created",
 	"message.memorypalace.lock_owner_only": "Only the author can lock this note; opening it as a normal note",
 	"message.memorypalace.copied_encrypted": "Copied: the new note is encrypted with your vault password",
 	"message.memorypalace.lock_in_progress": "This note is being locked; finish it in the window that opened (you can retry after 30 seconds)"

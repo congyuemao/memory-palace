@@ -10,6 +10,7 @@ import com.memorypalace.core.crypto.MasterKey;
 import com.memorypalace.core.crypto.NoteEnvelope;
 import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.crypto.WrongKeyException;
+import com.memorypalace.core.vault.FolderCopy;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.CryptoPayloads;
 import com.memorypalace.mc.EditPayloads;
@@ -466,6 +467,14 @@ public final class CryptoClient {
 					copyEncrypted(id, body);
 				}
 			}
+			case "copy_into_folder" -> {
+				// 刚右键了抄这一篇的空白抄本，目标在被锁的文件夹里：用文件夹钥匙按目标 ID 加密原正文后存进去
+				Optional<FolderCopy.Packed> packed = FolderCopy.unpack(body);
+				if (packed.isPresent() && PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.COPY),
+						packed.get().source(), NEW_NOTE_INTENT_NANOS)) {
+					copyIntoFolder(id, packed.get());
+				}
+			}
 			case "encrypt_new_folder" -> {
 				// 建在被锁的文件夹里：三种空白笔记右键新建都会走到这里（结果是加密，不会降级成明文）
 				boolean item = PalaceInteractions.takeLocalItemUse(java.util.Set.of(PalaceInteractions.ItemUse.PLAIN_BLANK,
@@ -648,6 +657,64 @@ public final class CryptoClient {
 	 * 抄一篇加密笔记：packed = "原笔记ID:原密文"。用自己的钥匙解开原笔记（需要时输保险库密码或文件夹密码），
 	 * 再用保险库主密钥按新笔记的 ID 加密（密文绑定笔记 ID，不能直接复制），存进服务端刚建好的新笔记。
 	 */
+	/**
+	 * 抄进被锁的文件夹（见 FolderCopy）：原正文是密文就先用自己的钥匙解开，再用目标所在文件夹的钥匙
+	 * （需要时输文件夹密码）按目标 ID 加密，保存时核对目标还是占位的样子——被外部改过就冲突，不覆盖。
+	 * 取消、失败都不写任何东西；再右键抄本可以重试。存好之后服务端把抄本换成笔记书。
+	 */
+	private static void copyIntoFolder(UUID targetId, FolderCopy.Packed packed) {
+		if (packed.source().equals(targetId)) {
+			return;
+		}
+		java.util.function.Consumer<String> sealAndSave = plain -> FolderKeys.withLock(targetId, data -> {
+			String lockId;
+			try {
+				lockId = "ok".equals(data.status()) ? KeyRing.folderId(data.content()) : null;
+			} catch (IllegalArgumentException e) {
+				lockId = null;
+			}
+			if (lockId == null) {
+				PasswordScreen.tell("message.memorypalace.folder_lock_unavailable");
+				return;
+			}
+			String lock = lockId;
+			FolderKeys.require(targetId, lock, null, () -> {
+				MasterKey folderKey = FolderKeys.get(lock);
+				if (folderKey == null) {
+					PasswordScreen.tell("message.memorypalace.copy_retry");
+					return;
+				}
+				FolderCopy.Sealed sealed = sealWithFolderLock(targetId, plain, lock, folderKey);
+				int generation = ClientKeys.generation();
+				NoteSealers.pending(sealed.key());
+				NoteSaver.save(targetId, sealed.text(), packed.targetHash(), result -> {
+					NoteSealers.settled(sealed.key());
+					boolean ok = "OK".equals(result.result());
+					if (ok && generation == ClientKeys.generation()) {
+						rememberEncrypted(targetId);
+						NoteSealers.remember(targetId, sealed.key(), sealed.text());
+					} else {
+						sealed.key().destroy();
+						if (ok) {
+							rememberEncrypted(targetId);
+						}
+					}
+					// 成功的提示由服务端换笔记书时发；这里只说没成功的原因
+					if (!ok) {
+						PasswordScreen.tell("CONFLICT".equals(result.result())
+								? "message.memorypalace.copy_conflict" : "message.memorypalace.copy_retry");
+					}
+					Minecraft.getInstance().gui.setScreen(null);
+				});
+			});
+		});
+		if (Ciphertext.isEncrypted(packed.body())) {
+			withPlain(packed.source(), packed.body(), sealAndSave);
+		} else {
+			sealAndSave.accept(packed.body());
+		}
+	}
+
 	/** "原笔记ID:原密文" 里的原笔记 ID；格式不对时用一个不会和任何右键对上的 ID。 */
 	private static UUID copySource(String packed) {
 		int colon = packed.indexOf(':');
@@ -918,7 +985,7 @@ public final class CryptoClient {
 
 	/** 用文件夹钥匙加密好，排进 FolderBatch 逐篇保存（存成功才记下内容钥匙）。 */
 	private static void queueFolderSeal(UUID id, String plain, String stored, String lockId, MasterKey folderKey) {
-		Sealed sealed = sealWithFolderLock(id, plain, lockId, folderKey);
+		FolderCopy.Sealed sealed = sealWithFolderLock(id, plain, lockId, folderKey);
 		FolderBatch.add(new FolderBatch.SaveJob(id, sealed.text(), Vault.hash(stored), ok -> {
 			if (ok) {
 				rememberEncrypted(id);
@@ -1048,19 +1115,9 @@ public final class CryptoClient {
 		}
 	}
 
-	/** 用文件夹钥匙加密好的一篇：新的内容钥匙 + 密文。 */
-	private record Sealed(ContentKey key, String text) {}
-
 	/** 用文件夹钥匙给这篇加密：新的内容钥匙，只有一把 f 锁（保险库密码打不开）。 */
-	private static Sealed sealWithFolderLock(UUID id, String plain, String lockId, MasterKey folderKey) {
-		ContentKey contentKey = ContentKey.random();
-		byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
-		try {
-			return new Sealed(contentKey, NoteEnvelope.seal(id, contentKey, plain,
-					java.util.Map.of(new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId), wrapping)));
-		} finally {
-			java.util.Arrays.fill(wrapping, (byte) 0);
-		}
+	private static FolderCopy.Sealed sealWithFolderLock(UUID id, String plain, String lockId, MasterKey folderKey) {
+		return FolderCopy.seal(id, plain, lockId, folderKey);
 	}
 
 	/**
@@ -1069,7 +1126,7 @@ public final class CryptoClient {
 	 */
 	private static void saveWithFolderLock(UUID id, String plain, String stored, String lockId, MasterKey folderKey,
 			java.util.function.Consumer<EditPayloads.SaveResult> after) {
-		Sealed s = sealWithFolderLock(id, plain, lockId, folderKey);
+		FolderCopy.Sealed s = sealWithFolderLock(id, plain, lockId, folderKey);
 		ContentKey contentKey = s.key();
 		String sealed = s.text();
 		NoteSaver.save(id, sealed, Vault.hash(stored), result -> {
