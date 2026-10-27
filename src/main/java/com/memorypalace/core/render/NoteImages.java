@@ -171,9 +171,9 @@ public final class NoteImages {
 		}
 	}
 
-	/** 网络收到的图最多这么大（服务端发的都缩到 1024 以内，这里留余量）。 */
-	public static final int MAX_RECEIVED_SIDE = 4096;
-	public static final long MAX_RECEIVED_PIXELS = 16L * 1024 * 1024;
+	/** 网络收到的图最多这么大：服务端发的都缩到 1024 以内，比这大的一定不是正常的服务端发的。 */
+	public static final int MAX_RECEIVED_SIDE = 1024;
+	public static final long MAX_RECEIVED_PIXELS = 1024L * 1024;
 
 	/**
 	 * PNG（或 jpg 等 ImageIO 能读的）字节 → 位图；失败 → empty，不抛异常。

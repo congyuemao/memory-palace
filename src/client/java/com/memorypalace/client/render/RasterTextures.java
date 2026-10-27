@@ -12,11 +12,14 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * 把 Raster（公式、图片）变成游戏贴图并缓存。最多同时保留 MAX 张，最久没用的会被释放。
+ * 把 Raster（公式、图片）变成游戏贴图并缓存。最多同时保留 MAX 张、合计 MAX_PIXELS 像素，最久没用的会被释放。
  * 只能在渲染线程（客户端主线程）调用。
  */
 public final class RasterTextures {
 	private static final int MAX = 256;
+	// 按像素算总量（约 64MB 显存/内存）：图片来自服务端，不能只数张数，否则几十张大图就能把客户端撑爆
+	private static final long MAX_PIXELS = 16L * 1024 * 1024;
+	private static long pixels;
 
 	/** 一张贴图：rasterW/H 是贴图本身的像素尺寸，depth 是基线以下的像素数（图片为 0）。 */
 	public record Tex(Identifier id, int rasterW, int rasterH, int depth) {}
@@ -55,10 +58,11 @@ public final class RasterTextures {
 		Minecraft.getInstance().getTextureManager().register(id, new DynamicTexture(id::toString, image));
 		Tex tex = new Tex(id, raster.width(), raster.height(), depth);
 		Tex old = CACHE.put(key, tex);
+		pixels += (long) raster.width() * raster.height();
 		if (old != null) {
 			release(old);
 		}
-		while (CACHE.size() > MAX) {
+		while (CACHE.size() > MAX || pixels > MAX_PIXELS && CACHE.size() > 1) {
 			var eldest = CACHE.entrySet().iterator().next();
 			CACHE.remove(eldest.getKey());
 			release(eldest.getValue());
@@ -70,9 +74,11 @@ public final class RasterTextures {
 	public static void clear() {
 		CACHE.values().forEach(RasterTextures::release);
 		CACHE.clear();
+		pixels = 0;
 	}
 
 	private static void release(Tex tex) {
+		pixels -= (long) tex.rasterW() * tex.rasterH();
 		Minecraft.getInstance().getTextureManager().release(tex.id());
 	}
 }
