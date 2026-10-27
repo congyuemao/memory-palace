@@ -166,12 +166,13 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.clientboundPlay().register(LookInfo.TYPE, LookInfo.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
-		// 收件箱现在只有一个（在笔记库根目录），只给本机房主用；每人一个收件箱是以后的事
+		// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/
 		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE, (p, ctx) -> {
-			if (PalaceAccess.isHost(ctx.player())) {
+			if (PalaceAccess.allowed(ctx.player(), PalaceAccess.CREATE)) {
 				capture(ctx.player(), p.text(), p.localTime());
 			} else {
-				ctx.player().sendSystemMessage(Component.translatable("message.memorypalace.inbox_host_only"));
+				ctx.player().sendSystemMessage(Component.translatable(PalaceAccess.enabled(ctx.player())
+						? "message.memorypalace.admin_only" : "message.memorypalace.multiplayer_off"));
 			}
 		});
 		// 准星书名、搜索：谁都能用，但只看得到自己读得了的笔记（每一篇单独检查）
@@ -195,11 +196,23 @@ public final class ToolPayloads {
 		if (last != null && now - last < CAPTURE_INTERVAL_MS) {
 			return;
 		}
+		UUID owner = PalaceAccess.isHost(player) ? null : player.getUUID();
+		OffsetDateTime time = playerTime(localTime);
+		// 当天的收件箱还没建：新建一篇算进普通玩家的篇数上限
+		int maxNotes = PalaceConfig.get().maxNotesPerPlayer();
+		if (owner != null && maxNotes > 0 && !PalaceAccess.admin(player) && vault.resolve(Inbox.pathFor(owner, time)).isEmpty()
+				&& vault.list().stream().filter(n -> owner.equals(n.access().owner())).count() >= maxNotes) {
+			player.sendSystemMessage(Component.translatable("command.memorypalace.quota_notes", maxNotes));
+			return;
+		}
 		try {
-			NoteSummary inbox = Inbox.append(vault, playerTime(localTime), text);
+			NoteSummary inbox = Inbox.append(vault, owner, time, text);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.captured", inbox.relativePath()));
 		} catch (IllegalArgumentException e) {
 			// 空内容：什么都不做
+		} catch (Inbox.NotYoursException e) {
+			MemoryPalace.LOGGER.warn("{} 的收件箱文件作者不是本人，拒绝写入", player.getName().getString());
+			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_not_yours"));
 		} catch (IllegalStateException e) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_encrypted"));
 		} catch (Inbox.FullException e) {

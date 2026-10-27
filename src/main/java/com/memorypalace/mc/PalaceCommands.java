@@ -86,22 +86,22 @@ public final class PalaceCommands {
 								.executes(PalaceCommands::showVisibility)
 								.then(Commands.literal("everyone").executes(ctx -> setVisibility(ctx, NoteAccess.Visibility.EVERYONE)))
 								.then(Commands.literal("private").executes(ctx -> setVisibility(ctx, NoteAccess.Visibility.PRIVATE))))
-						// 加密：只有本机房主（钥匙圈现在只有一个）
+						// 加密：每人用自己的钥匙圈，只能加密自己是作者的笔记（多人关着时只有房主）
 						.then(Commands.literal("newsecret")
-								.requires(PalaceCommands::host)
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
 								.then(Commands.argument("path", StringArgumentType.greedyString())
 										.executes(ctx -> create(ctx, true))))
 						.then(Commands.literal("encrypt")
-								.requires(PalaceCommands::host)
+								.requires(PalaceCommands::canCrypto)
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
 										.executes(ctx -> crypto(ctx, true))))
 						.then(Commands.literal("decrypt")
-								.requires(PalaceCommands::host)
+								.requires(PalaceCommands::canCrypto)
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
 										.executes(ctx -> crypto(ctx, false))))
-						.then(Commands.literal("lock").requires(PalaceCommands::host).executes(ctx -> {
+						.then(Commands.literal("lock").requires(PalaceCommands::canCrypto).executes(ctx -> {
 							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
 							return 1;
 						}))
@@ -131,8 +131,8 @@ public final class PalaceCommands {
 		return source.getPlayer() != null && PalaceAccess.admin(source.getPlayer());
 	}
 
-	private static boolean host(CommandSourceStack source) {
-		return source.getPlayer() != null && PalaceAccess.isHost(source.getPlayer());
+	private static boolean canCrypto(CommandSourceStack source) {
+		return source.getPlayer() != null && CryptoPayloads.allowed(source.getPlayer());
 	}
 
 	/** 这个人读得了这篇吗？（命令里用：找不到人就当读不了） */
@@ -619,11 +619,11 @@ public final class PalaceCommands {
 	}
 
 	/** 放玩家个人区的文件夹。 */
-	static final String PLAYERS_FOLDER = "players";
+	static final String PLAYERS_FOLDER = NoteAccess.PLAYERS_FOLDER;
 
-	/** 普通玩家的个人区：players/&lt;UUID&gt;。用 UUID 不用名字：名字可以改。 */
+	/** 普通玩家的个人区：players/&lt;UUID&gt;。 */
 	static String personalFolder(ServerPlayer player) {
-		return PLAYERS_FOLDER + "/" + player.getUUID();
+		return NoteAccess.personalFolder(player.getUUID());
 	}
 
 	/** 按路径找笔记：先在自己的个人区里找（普通玩家输入的路径都相对个人区），找不到再按整个笔记库的路径找。 */

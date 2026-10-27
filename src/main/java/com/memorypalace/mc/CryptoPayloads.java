@@ -36,12 +36,17 @@ public final class CryptoPayloads {
 	private CryptoPayloads() {}
 
 	/**
-	 * 只有本机房主能动钥匙圈、加密解密：钥匙圈现在是整个笔记库共用一个（每人一个钥匙圈是以后的事）。
-	 * 开放到局域网时房主照常能用，访客不行（访客也能发消息，不能让他们读走或覆盖钥匙圈）；专用服务器上没有房主，谁都不行。
+	 * 能不能用加密：每人一个钥匙圈（见 file），所以多人开着时谁都能用，但只碰得到自己的钥匙圈；
+	 * 加密只能加密自己是作者的笔记（命令和 EditPayloads 里另外检查）。多人关着时只有本机房主能用。
 	 */
 	public static boolean allowed(ServerPlayer player) {
-		return PalaceAccess.isHost(player);
+		return PalaceAccess.enabled(player);
 	}
+
+	// 钥匙圈限速：读每人每秒 2 次、最多连着 10 次（每次解锁都要读一次）；
+	// 写每 2 秒 1 次、最多连着 5 次（设密码、改密码、生成恢复密钥都远到不了）
+	private static final RateLimiter KEYRING_READ_RATE = new RateLimiter(2, 10);
+	private static final RateLimiter KEYRING_WRITE_RATE = new RateLimiter(0.5, 5);
 
 	/**
 	 * 客户端 → 服务端：我要解除这篇的加密（玩家在打开着的加密笔记上点了 🔓）。
@@ -154,7 +159,11 @@ public final class CryptoPayloads {
 				ServerPlayNetworking.send(player, new KeyringData("denied", ""));
 				return;
 			}
-			Path file = file();
+			if (!KEYRING_READ_RATE.tryTake(player.getUUID())) {
+				ServerPlayNetworking.send(player, new KeyringData("error", ""));
+				return;
+			}
+			Path file = file(player);
 			if (file == null) {
 				ServerPlayNetworking.send(player, new KeyringData("error", ""));
 				return;
@@ -203,10 +212,13 @@ public final class CryptoPayloads {
 
 	private static String write(ServerPlayer player, KeyringWrite payload) {
 		if (!allowed(player)) {
-			MemoryPalace.LOGGER.warn("拒绝了 {} 写钥匙圈的请求：只有本机房主可以修改", player.getName().getString());
+			MemoryPalace.LOGGER.warn("拒绝了 {} 写钥匙圈的请求：多人功能没有开启", player.getName().getString());
 			return "DENIED";
 		}
-		Path file = file();
+		if (!KEYRING_WRITE_RATE.tryTake(player.getUUID())) {
+			return "ERROR";
+		}
+		Path file = file(player);
 		if (file == null) {
 			return "ERROR";
 		}
@@ -250,8 +262,17 @@ public final class CryptoPayloads {
 		return true;
 	}
 
-	private static Path file() {
+	/**
+	 * 这个玩家的钥匙圈文件。本机房主用原来的 .palace/keyring（单人时代的钥匙圈，不迁移）；
+	 * 其他玩家各用 .palace/keyrings/&lt;UUID&gt;。每人只读写自己那一份：钥匙圈里是锁着的主密钥，没有密码，
+	 * 但也不能让别人拿去离线猜密码，或者覆盖掉。
+	 */
+	private static Path file(ServerPlayer player) {
 		Vault vault = PalaceServer.vault();
-		return vault == null ? null : vault.root().resolve(".palace").resolve("keyring");
+		if (vault == null) {
+			return null;
+		}
+		Path palace = vault.root().resolve(".palace");
+		return PalaceAccess.isHost(player) ? palace.resolve("keyring") : palace.resolve("keyrings").resolve(player.getUUID().toString());
 	}
 }

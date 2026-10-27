@@ -6,10 +6,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,6 +22,163 @@ class InboxTest {
 	private static final ZoneOffset MELBOURNE = ZoneOffset.ofHours(11);
 	private static final ZoneOffset CHINA = ZoneOffset.ofHours(8);
 	private static final OffsetDateTime T = OffsetDateTime.of(2026, 10, 27, 14, 32, 0, 0, MELBOURNE);
+	private static final UUID ALICE = UUID.fromString("11111111-1111-1111-1111-111111111111");
+	private static final UUID BOB = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+	@Test
+	void firstPlayerCaptureCreatesOwnedDailyInbox() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		String path = "players/" + ALICE + "/收件箱/2026-10-27.md";
+		assertFalse(Files.exists(dir.resolve("players/" + ALICE + "/收件箱")));
+
+		NoteSummary note = Inbox.append(vault, ALICE, T, "第一条");
+		assertEquals(path, Inbox.pathFor(ALICE, T));
+		assertEquals(path, note.relativePath());
+		assertTrue(Files.isRegularFile(dir.resolve(path)));
+		String text = Files.readString(dir.resolve(path), StandardCharsets.UTF_8);
+		assertEquals(ALICE.toString(), FrontMatter.parse(text).fields().get("palace-owner"));
+		assertEquals(ALICE, note.access().owner());
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) 第一条\n", vault.readBody(note.id()).orElseThrow());
+	}
+
+	@Test
+	void secondPlayerCaptureAppendsToTheSameDailyInbox() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		NoteSummary first = Inbox.append(vault, ALICE, T, "第一条");
+		NoteSummary second = Inbox.append(vault, ALICE, T.plusMinutes(38), "第二条");
+
+		assertEquals(first.id(), second.id());
+		assertEquals(first.relativePath(), second.relativePath());
+		assertEquals(ALICE, second.access().owner());
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) 第一条\n- 15:10 第二条\n",
+				vault.readBody(second.id()).orElseThrow());
+		try (var files = Files.list(dir.resolve("players/" + ALICE + "/收件箱"))) {
+			assertEquals(1, files.count());
+		}
+	}
+
+	@Test
+	void differentPlayersHaveSeparateDailyInboxes() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		NoteSummary alice = Inbox.append(vault, ALICE, T, "Alice 的想法");
+		NoteSummary bob = Inbox.append(vault, BOB, T, "Bob 的想法");
+
+		assertEquals("players/" + ALICE + "/收件箱/2026-10-27.md", alice.relativePath());
+		assertEquals("players/" + BOB + "/收件箱/2026-10-27.md", bob.relativePath());
+		assertNotEquals(alice.id(), bob.id());
+		assertTrue(Files.isRegularFile(dir.resolve(alice.relativePath())));
+		assertTrue(Files.isRegularFile(dir.resolve(bob.relativePath())));
+		assertEquals(ALICE, alice.access().owner());
+		assertEquals(BOB, bob.access().owner());
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) Alice 的想法\n", vault.readBody(alice.id()).orElseThrow());
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) Bob 的想法\n", vault.readBody(bob.id()).orElseThrow());
+	}
+
+	@Test
+	void hostCaptureCreatesRootInboxWithoutOwner() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		NoteSummary note = Inbox.append(vault, null, T, "房主的想法");
+
+		assertEquals("收件箱/2026-10-27.md", note.relativePath());
+		assertNull(note.access().owner());
+		String text = Files.readString(dir.resolve("收件箱/2026-10-27.md"), StandardCharsets.UTF_8);
+		assertFalse(FrontMatter.parse(text).fields().containsKey("palace-owner"));
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) 房主的想法\n", vault.readBody(note.id()).orElseThrow());
+	}
+
+	@Test
+	void oldOverloadAndExplicitNullOwnerAppendToTheSameInbox() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		NoteSummary first = Inbox.append(vault, T, "第一条");
+		NoteSummary second = Inbox.append(vault, null, T.plusMinutes(1), "第二条");
+		NoteSummary third = Inbox.append(vault, T.plusMinutes(2), "第三条");
+
+		assertEquals(first.id(), second.id());
+		assertEquals(first.id(), third.id());
+		assertEquals("收件箱/2026-10-27.md", third.relativePath());
+		assertNull(first.access().owner());
+		assertNull(third.access().owner());
+		String text = Files.readString(dir.resolve(third.relativePath()), StandardCharsets.UTF_8);
+		assertFalse(FrontMatter.parse(text).fields().containsKey("palace-owner"));
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) 第一条\n- 14:33 第二条\n- 14:34 第三条\n",
+				vault.readBody(third.id()).orElseThrow());
+	}
+
+	@Test
+	void playerCannotAppendToInboxOwnedBySomeoneElse() throws IOException {
+		Path file = dir.resolve("players/" + ALICE + "/收件箱/2026-10-27.md");
+		Files.createDirectories(file.getParent());
+		String original = "---\npalace-id: " + UUID.randomUUID() + "\npalace-owner: " + BOB + "\n---\n# 别人的笔记\n";
+		Files.writeString(file, original, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+
+		assertThrows(Inbox.NotYoursException.class, () -> Inbox.append(vault, ALICE, T, "我的想法"));
+		assertEquals(original, Files.readString(file, StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void playerCannotAppendToUnownedInboxInTheirArea() throws IOException {
+		Path file = dir.resolve("players/" + ALICE + "/收件箱/2026-10-27.md");
+		Files.createDirectories(file.getParent());
+		String original = "---\npalace-id: " + UUID.randomUUID() + "\n---\n# 无主的笔记\n";
+		Files.writeString(file, original, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+
+		assertThrows(Inbox.NotYoursException.class, () -> Inbox.append(vault, ALICE, T, "我的想法"));
+		assertEquals(original, Files.readString(file, StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void hostCannotAppendToOwnedRootInbox() throws IOException {
+		Path file = dir.resolve("收件箱/2026-10-27.md");
+		Files.createDirectories(file.getParent());
+		String original = "---\npalace-id: " + UUID.randomUUID() + "\npalace-owner: " + ALICE + "\n---\n# 玩家的笔记\n";
+		Files.writeString(file, original, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+
+		assertThrows(Inbox.NotYoursException.class, () -> Inbox.append(vault, null, T, "房主的想法"));
+		assertEquals(original, Files.readString(file, StandardCharsets.UTF_8));
+		assertThrows(Inbox.NotYoursException.class, () -> Inbox.append(vault, T, "房主的想法"));
+		assertEquals(original, Files.readString(file, StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void folderForSeparatesHostAndPlayerInboxes() {
+		assertEquals("收件箱", Inbox.folderFor(null));
+		assertEquals("players/" + ALICE + "/收件箱", Inbox.folderFor(ALICE));
+	}
+
+	@Test
+	void pathForUsesLocalDateNearMidnight() {
+		// 本地已经是 27 日，UTC 仍然是 26 日。
+		OffsetDateTime now = OffsetDateTime.parse("2026-10-27T00:15:00+11:00");
+		assertEquals("收件箱/2026-10-27.md", Inbox.pathFor(null, now));
+		assertEquals("players/" + ALICE + "/收件箱/2026-10-27.md", Inbox.pathFor(ALICE, now));
+	}
+
+	@Test
+	void recognizesRootAndPlayerInboxFoldersAndTheirChildren() {
+		for (String folder : new String[]{"收件箱", "收件箱/子",
+				"players/" + ALICE + "/收件箱", "players/" + ALICE + "/收件箱/子"}) {
+			assertTrue(Inbox.isInboxFolder(folder), folder);
+		}
+	}
+
+	@Test
+	void rejectsFoldersOutsideRootAndPlayerInboxes() {
+		for (String folder : new String[]{"", "笔记", "收件箱x", "players", "players/收件箱",
+				"players/" + ALICE, "players/" + ALICE + "/笔记", "a/收件箱"}) {
+			assertFalse(Inbox.isInboxFolder(folder), folder);
+		}
+	}
 
 	@Test
 	void noFileUntilFirstCaptureAndFirstEntryIsTagged() throws IOException {

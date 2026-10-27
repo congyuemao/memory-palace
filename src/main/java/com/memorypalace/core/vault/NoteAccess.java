@@ -31,8 +31,15 @@ public final class NoteAccess {
 	public static final String READ_KEY = "palace-read";
 	public static final String EDIT_KEY = "palace-edit";
 	private static final String EVERYONE = "everyone";
+	/** 放玩家个人区的文件夹：players/&lt;UUID&gt;/。 */
+	public static final String PLAYERS_FOLDER = "players";
 
 	private NoteAccess() {}
+
+	/** 某个玩家的个人区："players/&lt;UUID&gt;"。用 UUID 不用名字：名字可以改。 */
+	public static String personalFolder(UUID player) {
+		return PLAYERS_FOLDER + "/" + player;
+	}
 
 	/** 世界设置"笔记可见性"：没写 palace-read 的笔记谁能读。 */
 	public enum Visibility {

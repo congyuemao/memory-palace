@@ -17,9 +17,9 @@ public record NoteSummary(UUID id, String relativePath, String title, boolean en
 		return slash < 0 ? "" : relativePath.substring(0, slash);
 	}
 
-	/** 收件箱里的笔记（快速收集写进去的）：永远私有。 */
+	/** 收件箱里的笔记（快速收集写进去的，房主的或某个玩家的）：永远私有。 */
 	public boolean inbox() {
-		return relativePath.startsWith(Inbox.FOLDER + "/");
+		return Inbox.isInboxFolder(folder());
 	}
 
 	/** 只有作者能碰：收件箱和加密笔记不受 palace-read / palace-edit 和可见性影响。 */

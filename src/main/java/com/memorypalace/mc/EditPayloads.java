@@ -162,7 +162,7 @@ public final class EditPayloads {
 		if (decrypt) {
 			guard = guard.substring(DECRYPT_PREFIX.length());
 		}
-		// 加密笔记只能通过"解除加密"变回明文（要本机房主）；普通保存写入明文会被拒绝，
+		// 加密笔记只能通过"解除加密"变回明文（要能用加密功能）；普通保存写入明文会被拒绝，
 		// 防止热重载等情况下界面状态不对，把解密后的内容悄悄以明文存回去
 		boolean wasEncrypted = vault.find(chunk.noteId()).map(NoteSummary::encrypted).orElse(false);
 		if (wasEncrypted && !NoteCipher.isEncrypted(body) && (!decrypt || !CryptoPayloads.allowed(player))) {
@@ -171,18 +171,18 @@ public final class EditPayloads {
 		}
 		// 写入前按文件此刻的内容再判断一次：权限、加密状态都可能在收块期间被外部改了
 		// 加密状态只能这样变：
-		// - 密文 → 明文：只有"解除加密"，而且要本机房主
-		// - 明文 → 密文：只有本机房主加密自己是作者的笔记（钥匙圈是房主的；替别人加密，别人就再也打不开。
-		//   普通编辑者也不能靠伪造一段 MPAL1: 开头的正文把笔记"加密"、把其他编辑者挡在外面）
-		boolean host = CryptoPayloads.allowed(player);
-		boolean mayDecrypt = decrypt && host;
+		// - 密文 → 明文：只有"解除加密"，而且是作者本人（加密笔记只有作者能改）
+		// - 明文 → 密文：只有作者用自己的钥匙圈加密自己的笔记（替别人加密，别人就再也打不开。
+		//   被分享了编辑权的人也不能靠伪造一段 MPAL1: 开头的正文把笔记"加密"、把其他编辑者挡在外面）
+		boolean mayCrypt = CryptoPayloads.allowed(player);
+		boolean mayDecrypt = decrypt && mayCrypt;
 		boolean bodyEncrypted = NoteCipher.isEncrypted(body);
 		NoteAccess.Who who = PalaceAccess.who(player);
 		try {
 			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body, guard.isEmpty() ? null : guard,
 					note -> note.canEdit(who) && (note.encrypted()
 							? bodyEncrypted || mayDecrypt
-							: !bodyEncrypted || host && NoteAccess.isOwner(note.access(), who)));
+							: !bodyEncrypted || mayCrypt && NoteAccess.isOwner(note.access(), who)));
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);

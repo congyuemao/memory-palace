@@ -166,7 +166,7 @@ public final class ImagePayloads {
 		String f = folder;
 		String top = personalArea(folder);
 		while (true) {
-			if (f.equals(Inbox.FOLDER) || f.startsWith(Inbox.FOLDER + "/")) {
+			if (Inbox.isInboxFolder(f)) {
 				return false;
 			}
 			if (vault.listFolder(f).stream().anyMatch(n -> !n.canRead(who, visibility))) {

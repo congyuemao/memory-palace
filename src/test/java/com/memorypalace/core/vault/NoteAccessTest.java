@@ -39,6 +39,54 @@ class NoteAccessTest {
 	}
 
 	@Test
+	void personalFolderUsesPlayerUuid() {
+		assertEquals("players/" + ALICE, NoteAccess.personalFolder(ALICE));
+		assertEquals("players/" + BOB, NoteAccess.personalFolder(BOB));
+	}
+
+	@Test
+	void playerInboxIsOwnerOnlyAndItsOwnerCanReadAndEdit(@TempDir Path dir) throws IOException {
+		String path = "players/" + ALICE + "/收件箱/2026-10-27.md";
+		Path file = dir.resolve(path);
+		Files.createDirectories(file.getParent());
+		Files.writeString(file, "---\npalace-owner: " + ALICE + "\n---\n# 收件箱\n", StandardCharsets.UTF_8);
+		Vault vault = new Vault(dir);
+		vault.scan();
+		NoteSummary note = vault.resolve(path).orElseThrow();
+
+		assertEquals(ALICE, note.access().owner());
+		assertFalse(note.encrypted());
+		assertTrue(note.inbox());
+		assertTrue(note.ownerOnly());
+		assertTrue(note.canRead(ALICE_PLAYER, EVERYONE));
+		assertTrue(note.canRead(ALICE_PLAYER, PRIVATE));
+		assertTrue(note.canEdit(ALICE_PLAYER));
+		assertFalse(note.canRead(BOB_PLAYER, EVERYONE));
+		assertFalse(note.canEdit(BOB_PLAYER));
+		assertFalse(note.titleIsPublic(EVERYONE));
+	}
+
+	@Test
+	void playerInboxIgnoresEveryoneSharingAndKeepsItsTitlePrivate(@TempDir Path dir) throws IOException {
+		String path = "players/" + ALICE + "/收件箱/2026-10-27.md";
+		Path file = dir.resolve(path);
+		Files.createDirectories(file.getParent());
+		Vault vault = new Vault(dir);
+		for (String sharing : new String[]{"palace-read: everyone\n", "palace-edit: everyone\n",
+				"palace-read: everyone\npalace-edit: everyone\n"}) {
+			Files.writeString(file, "---\npalace-owner: " + ALICE + "\n" + sharing + "---\n# 收件箱\n", StandardCharsets.UTF_8);
+			vault.scan();
+			NoteSummary note = vault.resolve(path).orElseThrow();
+
+			assertTrue(note.canRead(ALICE_PLAYER, EVERYONE), sharing);
+			assertTrue(note.canEdit(ALICE_PLAYER), sharing);
+			assertFalse(note.canRead(BOB_PLAYER, EVERYONE), sharing);
+			assertFalse(note.canEdit(BOB_PLAYER), sharing);
+			assertFalse(note.titleIsPublic(EVERYONE), sharing);
+		}
+	}
+
+	@Test
 	void parsesOwnerAndLists() {
 		Rules r = rules("palace-owner", ALICE.toString(),
 				"palace-read", "[" + BOB + ", '" + CAROL + "']",

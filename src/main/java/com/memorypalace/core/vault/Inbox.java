@@ -7,11 +7,15 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 快速收集的收件箱：每天一个文件 "收件箱/yyyy-MM-dd.md"，写下第一条时才创建（不会留下空文件）。
+ * 快速收集的收件箱：每天一个文件，写下第一条时才创建（不会留下空文件）。
+ * - 本机房主（owner = null）："收件箱/yyyy-MM-dd.md"，没有作者（无主笔记归房主）
+ * - 其他玩家："players/&lt;UUID&gt;/收件箱/yyyy-MM-dd.md"，作者是他自己
+ * 收件箱永远只有作者能读（见 NoteSummary.inbox）。
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class Inbox {
@@ -23,6 +27,13 @@ public final class Inbox {
 	public static final class FullException extends IOException {
 		public FullException() {
 			super("收件箱已满");
+		}
+	}
+
+	/** 当天的收件箱文件已经存在，但作者不是本人（别人在你的个人区里抢先建了同名文件）。 */
+	public static final class NotYoursException extends IllegalStateException {
+		public NotYoursException() {
+			super("收件箱的作者不是本人");
 		}
 	}
 
@@ -46,12 +57,21 @@ public final class Inbox {
 	 * - 返回这篇收件箱笔记（追加后的 NoteSummary）
 	 */
 	public static NoteSummary append(Vault vault, OffsetDateTime now, String text) throws IOException {
+		return append(vault, null, now, text);
+	}
+
+	/**
+	 * 同上，记进 owner 的收件箱（owner 为 null = 本机房主的收件箱）。
+	 * 当天的文件已经存在、作者却不是 owner（比如管理员在别人的个人区里抢先建了同名文件）→ IllegalStateException，
+	 * 不往里写：否则这个人记下的想法会落进别人能读的笔记里。
+	 */
+	public static NoteSummary append(Vault vault, UUID owner, OffsetDateTime now, String text) throws IOException {
 		String content = text == null ? "" : text.replace('\r', ' ').replace('\n', ' ').strip();
 		if (content.isEmpty()) {
 			throw new IllegalArgumentException("收集内容不能为空");
 		}
 		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
-		String path = FOLDER + "/" + date + ".md";
+		String path = pathFor(owner, now);
 		String time = now.format(DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT));
 		String tagged = "- " + time + " (" + label(now.getOffset()) + ") " + content + "\n";
 		String plain = "- " + time + " " + content + "\n";
@@ -65,7 +85,10 @@ public final class Inbox {
 						throw new IOException("收件箱笔记已不存在");
 					}
 					// 新文件的第一条一定标注时区
-					return vault.createNote(path, "# " + FOLDER + " " + date + "\n\n" + tagged);
+					return vault.createNote(path, "# " + FOLDER + " " + date + "\n\n" + tagged, owner);
+				}
+				if (!java.util.Objects.equals(note.access().owner(), owner)) {
+					throw new NotYoursException();
 				}
 				if (note.encrypted()) {
 					throw new IllegalStateException("不能向加密收件箱追加内容");
@@ -91,6 +114,31 @@ public final class Inbox {
 			}
 			throw new IOException("收件箱笔记连续发生写入冲突");
 		}
+	}
+
+	/** owner 在 now 这一天的收件箱文件路径（owner 为 null = 本机房主）。 */
+	public static String pathFor(UUID owner, OffsetDateTime now) {
+		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
+		return folderFor(owner) + "/" + date + ".md";
+	}
+
+	/** owner 的收件箱文件夹："收件箱" 或 "players/&lt;UUID&gt;/收件箱"。 */
+	public static String folderFor(UUID owner) {
+		return owner == null ? FOLDER : NoteAccess.personalFolder(owner) + "/" + FOLDER;
+	}
+
+	/** 这个文件夹是不是（某人的）收件箱，或者在收件箱里面："收件箱/…" 或 "players/&lt;任意&gt;/收件箱/…"。 */
+	public static boolean isInboxFolder(String folder) {
+		String rest = folder;
+		String players = NoteAccess.PLAYERS_FOLDER + "/";
+		if (rest.startsWith(players)) {
+			int slash = rest.indexOf('/', players.length());
+			if (slash < 0) {
+				return false;
+			}
+			rest = rest.substring(slash + 1);
+		}
+		return rest.equals(FOLDER) || rest.startsWith(FOLDER + "/");
 	}
 
 	/** "UTC"、"UTC+8"、"UTC-3:30"、"UTC+5:45"。 */
