@@ -113,6 +113,17 @@ public final class FolderKeys {
 		ClientPlayNetworking.send(new FolderPayloads.LockWrite(id, folder, oldContent.isEmpty() ? "" : Vault.hash(oldContent), newContent));
 	}
 
+	/**
+	 * 删锁文件（解除文件夹密码的最后一步）。oldContent = 现在的锁内容。服务端会再查一遍文件夹里没有笔记还用着这把锁，
+	 * 否则拒绝（"NOT_EMPTY"）。done(true) = 已删掉。
+	 */
+	public static void deleteLock(String folder, String oldContent, Consumer<Boolean> done) {
+		int id = ++writeCounter;
+		int gen = ClientKeys.generation();
+		WRITES.put(id, ok -> done.accept(ok && gen == ClientKeys.generation()));
+		ClientPlayNetworking.send(new FolderPayloads.LockDelete(id, folder, Vault.hash(oldContent)));
+	}
+
 	public static void onLockWriteResult(FolderPayloads.LockWriteResult result) {
 		Consumer<Boolean> callback = WRITES.remove(result.requestId());
 		if (callback == null) {
@@ -123,6 +134,7 @@ public final class FolderKeys {
 			PasswordScreen.tell(switch (result.result()) {
 				case "CONFLICT" -> "message.memorypalace.folder_lock_conflict";
 				case "DENIED" -> "command.memorypalace.folder_denied";
+				case "NOT_EMPTY" -> "message.memorypalace.folder_unlock_incomplete";
 				default -> "message.memorypalace.folder_lock_write_failed";
 			});
 		}

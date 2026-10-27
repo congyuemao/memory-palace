@@ -108,6 +108,16 @@ public final class PalaceCommands {
 								.then(Commands.argument("folder", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(folderSuggestions(ctx.getSource()), builder))
 										.executes(PalaceCommands::lockFolder)))
+						.then(Commands.literal("folderpassword")
+								.requires(PalaceCommands::canCrypto)
+								.then(Commands.argument("folder", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(lockedFolderSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> folderLockAction(ctx, "folder_password"))))
+						.then(Commands.literal("unlockfolder")
+								.requires(PalaceCommands::canCrypto)
+								.then(Commands.argument("folder", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(lockedFolderSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> folderLockAction(ctx, "unlock_folder"))))
 						.then(Commands.literal("lock").requires(PalaceCommands::canCrypto).executes(ctx -> {
 							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
 							return 1;
@@ -633,12 +643,8 @@ public final class PalaceCommands {
 			return 0;
 		}
 		ServerPlayer player = ctx.getSource().getPlayerOrException();
-		String input = StringArgumentType.getString(ctx, "folder").strip().replace('\\', '/');
-		while (input.endsWith("/")) {
-			input = input.substring(0, input.length() - 1);
-		}
-		String mine = personalFolder(player) + "/" + input;
-		String folder = !input.isEmpty() && java.nio.file.Files.isDirectory(vault.root().resolve(mine)) ? mine : input;
+		String input = StringArgumentType.getString(ctx, "folder");
+		String folder = folderFromInput(vault, player, input);
 		try {
 			if (!FolderPayloads.mayManage(player, folder)) {
 				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_denied"));
@@ -663,6 +669,63 @@ public final class PalaceCommands {
 		}
 		CryptoPayloads.sendAction(player, new UUID(0, 0), "lock_folder", folder, "");
 		return 1;
+	}
+
+	/** 命令里输入的文件夹：先在自己的个人区里找，没有再按整个笔记库的路径。去掉首尾空白和结尾的 "/"。 */
+	private static String folderFromInput(Vault vault, ServerPlayer player, String raw) {
+		String input = raw.strip().replace('\\', '/');
+		while (input.endsWith("/")) {
+			input = input.substring(0, input.length() - 1);
+		}
+		String mine = personalFolder(player) + "/" + input;
+		return !input.isEmpty() && java.nio.file.Files.isDirectory(vault.root().resolve(mine)) ? mine : input;
+	}
+
+	/**
+	 * /palace folderpassword、/palace unlockfolder &lt;文件夹&gt;：检查能管这个文件夹、它确实有锁，
+	 * 然后把锁文件交给客户端（Action "folder_password" / "unlock_folder"，title = 文件夹，body = 锁的内容），
+	 * 由客户端要求输入当前文件夹密码（忘记时可以用恢复密钥）再继续。
+	 */
+	private static int folderLockAction(CommandContext<CommandSourceStack> ctx, String action) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		String input = StringArgumentType.getString(ctx, "folder");
+		String folder = folderFromInput(vault, player, input);
+		Optional<String> lock;
+		try {
+			if (!FolderPayloads.mayManage(player, folder)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_denied"));
+				return 0;
+			}
+			lock = FolderPayloads.lockAt(vault, folder);
+		} catch (IOException | IllegalArgumentException e) {
+			lock = Optional.empty();
+		}
+		if (lock.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_not_locked", input.strip()));
+			return 0;
+		}
+		CryptoPayloads.sendAction(player, new UUID(0, 0), action, folder, lock.get());
+		return 1;
+	}
+
+	// /palace folderpassword、unlockfolder 的补全：自己能管的、已经上锁的文件夹
+	private static List<String> lockedFolderSuggestions(CommandSourceStack source) {
+		Vault vault = PalaceServer.vault();
+		ServerPlayer player = source.getPlayer();
+		if (vault == null || player == null) {
+			return List.of();
+		}
+		return folderSuggestions(source).stream().filter(f -> {
+			try {
+				return FolderPayloads.lockAt(vault, f).isPresent();
+			} catch (IOException | IllegalArgumentException e) {
+				return false;
+			}
+		}).toList();
 	}
 
 	// /palace lockfolder 的补全：自己能锁的、还没锁的、有笔记的文件夹

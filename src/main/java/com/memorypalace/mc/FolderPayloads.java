@@ -108,6 +108,39 @@ public final class FolderPayloads {
 		}
 	}
 
+	/**
+	 * 客户端 → 服务端：要解除这个文件夹的密码，把里面还用着这把锁的笔记逐篇发过来解密（Action "decrypt_folder"），
+	 * 发完再发一个 "decrypt_folder_done"（title = 文件夹，body = 发了几篇）。
+	 */
+	public record DecryptAll(String folder) implements CustomPacketPayload {
+		public static final Type<DecryptAll> TYPE = new Type<>(MemoryPalace.id("folder_decrypt_all"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, DecryptAll> CODEC = StreamCodec.composite(
+				ByteBufCodecs.stringUtf8(1024), DecryptAll::folder, DecryptAll::new);
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * 客户端 → 服务端：删掉锁文件（解除文件夹密码的最后一步）。结果用 LockWriteResult 回："OK"、"NOT_EMPTY"（还有笔记用着这把锁）、
+	 * "CONFLICT"、"DENIED"、"ERROR"。
+	 */
+	public record LockDelete(int requestId, String folder, String expectedHash) implements CustomPacketPayload {
+		public static final Type<LockDelete> TYPE = new Type<>(MemoryPalace.id("folder_lock_delete"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, LockDelete> CODEC = StreamCodec.composite(
+				ByteBufCodecs.VAR_INT, LockDelete::requestId,
+				ByteBufCodecs.stringUtf8(1024), LockDelete::folder,
+				ByteBufCodecs.stringUtf8(64), LockDelete::expectedHash,
+				LockDelete::new);
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
+
 	// 读写锁的限速（和钥匙圈一样）
 	private static final RateLimiter READ_RATE = new RateLimiter(2, 10);
 	private static final RateLimiter WRITE_RATE = new RateLimiter(0.5, 5);
@@ -116,6 +149,8 @@ public final class FolderPayloads {
 		PayloadTypeRegistry.serverboundPlay().register(LockRequest.TYPE, LockRequest.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(LockWrite.TYPE, LockWrite.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(EncryptAll.TYPE, EncryptAll.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(DecryptAll.TYPE, DecryptAll.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(LockDelete.TYPE, LockDelete.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(LockData.TYPE, LockData.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(LockWriteResult.TYPE, LockWriteResult.CODEC);
 
@@ -123,6 +158,83 @@ public final class FolderPayloads {
 		ServerPlayNetworking.registerGlobalReceiver(LockWrite.TYPE,
 				(p, ctx) -> ServerPlayNetworking.send(ctx.player(), new LockWriteResult(p.requestId(), write(ctx.player(), p))));
 		ServerPlayNetworking.registerGlobalReceiver(EncryptAll.TYPE, (p, ctx) -> encryptAll(ctx.player(), p.folder()));
+		ServerPlayNetworking.registerGlobalReceiver(DecryptAll.TYPE, (p, ctx) -> decryptAll(ctx.player(), p.folder()));
+		ServerPlayNetworking.registerGlobalReceiver(LockDelete.TYPE,
+				(p, ctx) -> ServerPlayNetworking.send(ctx.player(), new LockWriteResult(p.requestId(), delete(ctx.player(), p))));
+	}
+
+	/** 这个文件夹的锁（锁文件就在 folder 本身，不是上层）；没有时为 empty。 */
+	public static Optional<String> lockAt(Vault vault, String folder) throws IOException {
+		return FolderLocks.read(vault, folder);
+	}
+
+	/** 文件夹里还用着这把锁（f 锁 ID = lockId）的笔记。 */
+	public static List<NoteSummary> notesUsingLock(Vault vault, String folder, String lockId) throws IOException {
+		return FolderLocks.notesUsing(vault, folder, lockId);
+	}
+
+	/** 解除文件夹密码：把还用着这把锁的笔记逐篇发给客户端解密，最后发一个 "decrypt_folder_done"。 */
+	private static void decryptAll(ServerPlayer player, String folder) {
+		Vault vault = PalaceServer.vault();
+		if (vault == null || !mayManage(player, folder) || !WRITE_RATE.tryTake(player.getUUID())) {
+			return;
+		}
+		try {
+			Optional<String> content = lockAt(vault, folder);
+			if (content.isEmpty()) {
+				return;
+			}
+			String lockId = KeyRing.folderId(content.get());
+			NoteAccess.Who who = PalaceAccess.who(player);
+			int sent = 0;
+			int tooLong = 0;
+			for (NoteSummary note : notesUsingLock(vault, folder, lockId)) {
+				Optional<Vault.Read> read = vault.readNote(note.id());
+				if (read.isEmpty() || !NoteAccess.isOwner(read.get().note().access(), who)) {
+					continue;
+				}
+				if (CryptoPayloads.sendAction(player, note.id(), "decrypt_folder", note.title(), read.get().body())) {
+					sent++;
+				} else {
+					tooLong++;
+				}
+			}
+			if (tooLong > 0) {
+				player.sendSystemMessage(Component.translatable("command.memorypalace.folder_too_long", tooLong, CryptoPayloads.MAX_ACTION_BODY));
+			}
+			CryptoPayloads.sendAction(player, new UUID(0, 0), "decrypt_folder_done", folder, Integer.toString(sent));
+		} catch (IOException | IllegalArgumentException e) {
+			MemoryPalace.LOGGER.error("解除文件夹密码失败：{}", folder, e);
+		}
+	}
+
+	/** 删锁文件：只有文件夹里已经没有笔记用着这把锁时才删（否则那些笔记就再也打不开了）。 */
+	private static String delete(ServerPlayer player, LockDelete payload) {
+		Vault vault = PalaceServer.vault();
+		String folder = payload.folder();
+		if (vault == null || !mayManage(player, folder)) {
+			return "DENIED";
+		}
+		if (!WRITE_RATE.tryTake(player.getUUID())) {
+			return "ERROR";
+		}
+		try {
+			Optional<String> content = lockAt(vault, folder);
+			if (content.isEmpty()) {
+				return "OK";
+			}
+			if (!notesUsingLock(vault, folder, KeyRing.folderId(content.get())).isEmpty()) {
+				return "NOT_EMPTY";
+			}
+			return switch (FolderLocks.delete(vault, folder, payload.expectedHash())) {
+				case OK -> "OK";
+				case CONFLICT -> "CONFLICT";
+				case MISSING_FOLDER -> "ERROR";
+			};
+		} catch (IOException | IllegalArgumentException e) {
+			MemoryPalace.LOGGER.warn("删除文件夹锁失败：{}", folder, e);
+			return "ERROR";
+		}
 	}
 
 	/**
@@ -142,8 +254,7 @@ public final class FolderPayloads {
 
 	/** 文件夹里（含子文件夹）的笔记。 */
 	public static List<NoteSummary> notesIn(Vault vault, String folder) {
-		return vault.list().stream()
-				.filter(n -> n.folder().equals(folder) || n.folder().startsWith(folder + "/")).toList();
+		return FolderLocks.notesIn(vault, folder);
 	}
 
 	/** folder 或它下面的任何一级文件夹已经有锁。 */

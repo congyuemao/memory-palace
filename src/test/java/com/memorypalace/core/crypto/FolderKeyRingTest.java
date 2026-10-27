@@ -71,20 +71,30 @@ class FolderKeyRingTest {
 	}
 
 	@Test
-	void changingPasswordPreservesFolderIdKeyRecoveryAndExistingNotes() throws Exception {
+	void passwordAndRecoveryPasswordChangesPreserveFolderIdAndBothNotes() throws Exception {
 		var created = KeyRing.createFolder(pw("password1"), true);
 		try {
 			String envelope = seal(created);
+			UUID secondNote = UUID.fromString("00000000-0000-4000-8000-000000000002");
+			String secondPlaintext = "# Second folder secret\nAnother existing note";
+			String secondEnvelope = seal(created, secondNote, secondPlaintext);
 			String changed = KeyRing.changePassword(created.content(), created.key(), pw("password2"));
 			assertThrows(WrongKeyException.class, () -> KeyRing.unlock(changed, pw("password1")));
 			assertPasswordOpens(created, changed, "password2", envelope);
+			assertPasswordOpens(created, changed, "password2", secondEnvelope, secondNote, secondPlaintext);
 			assertTrue(KeyRing.hasRecovery(changed));
+			String reset;
 			MasterKey recovered = KeyRing.unlockWithRecovery(changed, created.recoveryKey());
 			try {
 				assertSameFolderAndOpens(created, changed, recovered, envelope);
+				assertSameFolderAndOpens(created, changed, recovered, secondEnvelope, secondNote, secondPlaintext);
+				reset = KeyRing.changePassword(changed, recovered, pw("password3"));
 			} finally {
 				recovered.destroy();
 			}
+			assertThrows(WrongKeyException.class, () -> KeyRing.unlock(reset, pw("password2")));
+			assertPasswordOpens(created, reset, "password3", envelope);
+			assertPasswordOpens(created, reset, "password3", secondEnvelope, secondNote, secondPlaintext);
 		} finally {
 			created.key().destroy();
 		}
@@ -218,10 +228,14 @@ class FolderKeyRingTest {
 	}
 
 	private static String seal(KeyRing.Created created) {
+		return seal(created, NOTE, PLAINTEXT);
+	}
+
+	private static String seal(KeyRing.Created created, UUID noteId, String plaintext) {
 		ContentKey key = ContentKey.random();
 		byte[] wrapping = NoteEnvelope.folderWrappingKey(created.key());
 		try {
-			return NoteEnvelope.seal(NOTE, key, PLAINTEXT, Map.of(folderLock(created.content()), wrapping));
+			return NoteEnvelope.seal(noteId, key, plaintext, Map.of(folderLock(created.content()), wrapping));
 		} finally {
 			NoteCipher.wipe(wrapping);
 			key.destroy();
@@ -230,9 +244,14 @@ class FolderKeyRingTest {
 
 	private static void assertPasswordOpens(KeyRing.Created original, String content, String password,
 			String envelope) throws WrongKeyException {
+		assertPasswordOpens(original, content, password, envelope, NOTE, PLAINTEXT);
+	}
+
+	private static void assertPasswordOpens(KeyRing.Created original, String content, String password,
+			String envelope, UUID noteId, String plaintext) throws WrongKeyException {
 		MasterKey unlocked = KeyRing.unlock(content, pw(password));
 		try {
-			assertSameFolderAndOpens(original, content, unlocked, envelope);
+			assertSameFolderAndOpens(original, content, unlocked, envelope, noteId, plaintext);
 		} finally {
 			unlocked.destroy();
 		}
@@ -240,15 +259,20 @@ class FolderKeyRingTest {
 
 	private static void assertSameFolderAndOpens(KeyRing.Created original, String content, MasterKey unlocked,
 			String envelope) throws WrongKeyException {
+		assertSameFolderAndOpens(original, content, unlocked, envelope, NOTE, PLAINTEXT);
+	}
+
+	private static void assertSameFolderAndOpens(KeyRing.Created original, String content, MasterKey unlocked,
+			String envelope, UUID noteId, String plaintext) throws WrongKeyException {
 		assertEquals(KeyRing.folderId(original.content()), KeyRing.folderId(content));
 		assertArrayEquals(original.key().bytes(), unlocked.bytes());
 		assertFalse(KeyRing.hasBox(content));
 		assertNull(KeyRing.boxPublic(content));
 		byte[] wrapping = NoteEnvelope.folderWrappingKey(unlocked);
 		try {
-			ContentKey key = NoteEnvelope.unlock(NOTE, envelope, folderLock(original.content()), wrapping);
+			ContentKey key = NoteEnvelope.unlock(noteId, envelope, folderLock(original.content()), wrapping);
 			try {
-				assertEquals(PLAINTEXT, NoteEnvelope.decrypt(NOTE, envelope, key));
+				assertEquals(plaintext, NoteEnvelope.decrypt(noteId, envelope, key));
 			} finally {
 				key.destroy();
 			}

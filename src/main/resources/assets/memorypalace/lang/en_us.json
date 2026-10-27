@@ -231,5 +231,17 @@
 	"crypto.memorypalace.folder_setup_message": "This password only opens the notes in this folder. It is separate from your vault password, which cannot open them.\nAt least %s characters. Remember it: if you forget it and have no recovery key, these notes can never be opened again.",
 	"crypto.memorypalace.saving_folder_lock": "Saving the folder lock…",
 	"crypto.memorypalace.folder_unlock_title": "Unlock folder \"%s\"",
-	"crypto.memorypalace.folder_unlock_message": "Enter this folder's password"
+	"crypto.memorypalace.folder_unlock_message": "Enter this folder's password",
+	"command.memorypalace.folder_not_locked": "Folder \"%s\" has no password",
+	"message.memorypalace.folder_password_changed": "Folder password changed",
+	"message.memorypalace.folder_unlocking": "Removing the folder password; decrypting the notes inside one by one…",
+	"message.memorypalace.folder_unlocked": "Folder password removed; the notes inside are plain text again",
+	"message.memorypalace.folder_unlock_incomplete": "Some notes could not be decrypted, so the folder password was kept (those notes still open with it). Please try again",
+	"screen.memorypalace.confirm_unlock_folder.title": "Remove the password of folder \"%s\"?",
+	"screen.memorypalace.confirm_unlock_folder.message": "Afterwards the notes in this folder are stored as plain text on the server's disk, where server admins can read them. Continue?",
+	"screen.memorypalace.confirm_unlock_folder.yes": "Remove password",
+	"crypto.memorypalace.verify_folder_password": "Enter this folder's current password",
+	"crypto.memorypalace.verify_unlock_folder": "Enter this folder's password to remove it",
+	"crypto.memorypalace.folder_recover_title": "Reset the password of folder \"%s\"",
+	"crypto.memorypalace.folder_new_password_title": "New password for folder \"%s\""
 }

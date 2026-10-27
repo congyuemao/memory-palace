@@ -1,5 +1,7 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.NoteEnvelope;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -86,6 +88,53 @@ public final class FolderLocks {
 			Files.deleteIfExists(tmp);
 		}
 		return WriteResult.OK;
+	}
+
+	/**
+	 * 删掉锁文件（解除文件夹密码的最后一步）。expectedHash 是当前内容的指纹，对不上 → CONFLICT，不删；
+	 * 没有锁 → OK（已经删过了）。调用方必须先确认文件夹里没有笔记还在用这把锁，否则那些笔记就再也打不开了。
+	 */
+	public static synchronized WriteResult delete(Vault vault, String folder, String expectedHash) throws IOException {
+		Path file = lockFile(vault, folder);
+		String current;
+		try {
+			current = Files.readString(file, StandardCharsets.UTF_8);
+		} catch (NoSuchFileException e) {
+			return WriteResult.OK;
+		}
+		if (!Vault.hash(current).equals(expectedHash)) {
+			return WriteResult.CONFLICT;
+		}
+		Files.delete(file);
+		return WriteResult.OK;
+	}
+
+	/** 文件夹里（含子文件夹）的笔记。 */
+	public static java.util.List<NoteSummary> notesIn(Vault vault, String folder) {
+		return vault.list().stream()
+				.filter(n -> n.folder().equals(folder) || n.folder().startsWith(folder + "/")).toList();
+	}
+
+	/**
+	 * 文件夹里还用着这把锁（MPAL2 里有 f 锁、ID = lockId）的笔记。按文件此刻的内容判断。
+	 * 格式坏了、认不出来的 MPAL2 也算"还在用"：宁可不删锁，也不能让笔记再也打不开。
+	 */
+	public static java.util.List<NoteSummary> notesUsing(Vault vault, String folder, String lockId) throws IOException {
+		NoteEnvelope.Lock lock = new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId);
+		java.util.List<NoteSummary> out = new java.util.ArrayList<>();
+		for (NoteSummary note : notesIn(vault, folder)) {
+			Optional<Vault.Read> read = vault.readNote(note.id());
+			if (read.isPresent() && NoteEnvelope.isEnvelope(read.get().body())) {
+				try {
+					if (NoteEnvelope.locks(read.get().body()).contains(lock)) {
+						out.add(read.get().note());
+					}
+				} catch (IllegalArgumentException e) {
+					out.add(read.get().note());
+				}
+			}
+		}
+		return out;
 	}
 
 	/** 文件夹路径必须在笔记库里、不是根目录、每一级都不以 "." 开头、不含 ".."；否则 IllegalArgumentException。 */

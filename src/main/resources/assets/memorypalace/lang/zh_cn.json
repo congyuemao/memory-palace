@@ -231,5 +231,17 @@
 	"crypto.memorypalace.folder_setup_message": "这个密码只用来打开这个文件夹里的笔记，和保险库密码无关，保险库密码打不开它们。\n至少 %s 位，请牢记：忘记密码又没有恢复密钥时，这些笔记将永久打不开。",
 	"crypto.memorypalace.saving_folder_lock": "正在保存文件夹的锁……",
 	"crypto.memorypalace.folder_unlock_title": "解锁文件夹「%s」",
-	"crypto.memorypalace.folder_unlock_message": "请输入这个文件夹的密码"
+	"crypto.memorypalace.folder_unlock_message": "请输入这个文件夹的密码",
+	"command.memorypalace.folder_not_locked": "文件夹「%s」没有设密码",
+	"message.memorypalace.folder_password_changed": "文件夹密码已修改",
+	"message.memorypalace.folder_unlocking": "正在解除文件夹密码，逐篇解密里面的笔记……",
+	"message.memorypalace.folder_unlocked": "文件夹密码已解除，里面的笔记已改回明文",
+	"message.memorypalace.folder_unlock_incomplete": "有笔记没能解密，文件夹的密码还在（没解开的笔记仍可用文件夹密码打开），请重试",
+	"screen.memorypalace.confirm_unlock_folder.title": "解除文件夹「%s」的密码？",
+	"screen.memorypalace.confirm_unlock_folder.message": "解除后，这个文件夹里的笔记会以明文保存在服务器硬盘上，服务器管理员能看到。确定吗？",
+	"screen.memorypalace.confirm_unlock_folder.yes": "解除密码",
+	"crypto.memorypalace.verify_folder_password": "请输入这个文件夹现在的密码",
+	"crypto.memorypalace.verify_unlock_folder": "解除文件夹密码前，请输入这个文件夹的密码",
+	"crypto.memorypalace.folder_recover_title": "重设文件夹「%s」的密码",
+	"crypto.memorypalace.folder_new_password_title": "文件夹「%s」的新密码"
 }
