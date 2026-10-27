@@ -1,13 +1,7 @@
 package com.memorypalace.core.crypto;
 
-import com.password4j.Argon2Function;
-import com.password4j.Hash;
-import com.password4j.types.Argon2;
 import javax.crypto.KDF;
 import javax.crypto.spec.HKDFParameterSpec;
-import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
@@ -51,9 +45,9 @@ public final class KeyRing {
 	/** 密码最短长度。 */
 	public static final int MIN_PASSWORD = 6;
 	private static final SecureRandom RANDOM = new SecureRandom();
-	private static final int MEMORY_KIB = 65536;
-	private static final int ITERATIONS = 3;
-	private static final int PARALLELISM = 1;
+	private static final int MEMORY_KIB = PasswordKdf.MEMORY_KIB;
+	private static final int ITERATIONS = PasswordKdf.ITERATIONS;
+	private static final int PARALLELISM = PasswordKdf.PARALLELISM;
 	private static final String DOMAIN = "memory-palace|keyring|1|";
 	private static final String BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 	private static final Set<String> PASSWORD_FIELDS = Set.of("version", "kdf", "kdf.version",
@@ -223,37 +217,12 @@ public final class KeyRing {
 		if (password == null) {
 			throw new IllegalArgumentException("密码不能为空");
 		}
-		char[] copy = password.clone();
-		ByteBuffer encoded = null;
-		byte[] bytes = null;
-		byte[] salt = null;
-		Hash hash = null;
+		byte[] salt = decode(fields.get("password.salt"), 16);
 		try {
-			// 不把密码转成不可清零的 String；拒绝不完整的 UTF-16，避免编码碰撞。
-			encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(copy));
-			bytes = new byte[encoded.remaining()];
-			encoded.get(bytes);
-			salt = decode(fields.get("password.salt"), 16);
-			Argon2Function argon2 = Argon2Function.getInstance(
-					Integer.parseInt(fields.get("kdf.memoryKiB")), Integer.parseInt(fields.get("kdf.iterations")),
-					Integer.parseInt(fields.get("kdf.parallelism")), MasterKey.LENGTH, Argon2.ID,
-					Argon2Function.ARGON2_VERSION_13);
-			hash = argon2.hash(bytes, salt);
-			return hash.getBytes().clone();
-		} catch (CharacterCodingException e) {
-			throw new IllegalArgumentException("密码含无效字符");
+			return PasswordKdf.derive(password, salt, Integer.parseInt(fields.get("kdf.memoryKiB")),
+					Integer.parseInt(fields.get("kdf.iterations")), Integer.parseInt(fields.get("kdf.parallelism")));
 		} finally {
-			Arrays.fill(copy, '\0');
-			if (encoded != null && encoded.hasArray()) {
-				NoteCipher.wipe(encoded.array());
-			}
-			NoteCipher.wipe(bytes);
 			NoteCipher.wipe(salt);
-			if (hash != null) {
-				// password4j 还生成了 PHC 编码副本，和原始派生值一起清零，不写入 keyring。
-				NoteCipher.wipe(hash.getBytes());
-				NoteCipher.wipe(hash.getResultAsBytes());
-			}
 		}
 	}
 
