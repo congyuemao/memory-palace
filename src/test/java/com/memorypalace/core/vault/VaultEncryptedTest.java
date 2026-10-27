@@ -1,8 +1,10 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.ContentKey;
 import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.crypto.MasterKey;
 import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.NoteEnvelope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -10,6 +12,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -110,5 +114,83 @@ class VaultEncryptedTest {
 		vault.scan();
 		assertTrue(vault.find(id).orElseThrow().encrypted());
 		assertEquals("b", vault.find(id).orElseThrow().title());
+	}
+
+	@Test
+	void mpal2BodyWithoutFlagIsScannedAsEncryptedUsingTheFileName() throws IOException {
+		UUID id = UUID.randomUUID();
+		String cipher = envelope(id, "# Secret heading\nPrivate content");
+		String content = "---\npalace-id: " + id + "\n---\n \t\n" + cipher + "\n";
+		Files.writeString(dir.resolve("diary.md"), content, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+
+		NoteSummary note = vault.find(id).orElseThrow();
+		assertTrue(note.encrypted());
+		assertEquals("diary", note.title());
+		assertEquals(" \t\n" + cipher + "\n", vault.readBody(id).orElseThrow());
+		assertEquals(content, read("diary.md"), "Scanning must preserve externally written ciphertext");
+	}
+
+	@Test
+	void writingMpal2SetsTheFlagPreservesMetadataAndHidesTheTitle() throws IOException {
+		UUID id = UUID.randomUUID();
+		String plain = "# Secret heading\nPrivate content";
+		Files.writeString(dir.resolve("diary.md"),
+				"---\ntags: [private]\npalace-id: " + id + "\n---\n" + plain, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+		assertFalse(vault.find(id).orElseThrow().encrypted());
+		assertEquals("Secret heading", vault.find(id).orElseThrow().title());
+
+		String cipher = envelope(id, plain);
+		assertEquals(Vault.WriteResult.OK, vault.writeBody(id, cipher, Vault.hash(plain)));
+		String file = read("diary.md");
+		var parsed = FrontMatter.parse(file);
+		assertEquals("v1", parsed.fields().get("palace-encrypted"));
+		assertEquals("[private]", parsed.fields().get("tags"));
+		assertEquals(id, parsed.id());
+		assertEquals(cipher, parsed.body());
+		assertFalse(file.contains("Secret heading"));
+		assertTrue(vault.find(id).orElseThrow().encrypted());
+		assertEquals("diary", vault.find(id).orElseThrow().title());
+
+		vault.scan();
+		assertTrue(vault.find(id).orElseThrow().encrypted());
+		assertEquals("diary", vault.find(id).orElseThrow().title());
+	}
+
+	@Test
+	void writingPlaintextOverMpal2RemovesTheEncryptionFlag() throws IOException {
+		UUID id = UUID.randomUUID();
+		String plain = "# Secret heading\nPrivate content";
+		String cipher = envelope(id, plain);
+		Files.writeString(dir.resolve("diary.md"), "---\ntags: [private]\npalace-id: " + id
+				+ "\npalace-encrypted: v1\n---\n" + cipher, StandardCharsets.UTF_8);
+		var vault = new Vault(dir);
+		vault.scan();
+		assertTrue(vault.find(id).orElseThrow().encrypted());
+
+		assertEquals(Vault.WriteResult.OK, vault.writeBody(id, plain, Vault.hash(cipher)));
+		var parsed = FrontMatter.parse(read("diary.md"));
+		assertFalse(parsed.fields().containsKey("palace-encrypted"));
+		assertEquals("---\ntags: [private]\npalace-id: " + id + "\n---\n" + plain, read("diary.md"));
+		assertEquals(plain, vault.readBody(id).orElseThrow());
+		assertFalse(vault.find(id).orElseThrow().encrypted());
+		assertEquals("Secret heading", vault.find(id).orElseThrow().title());
+	}
+
+	private static String envelope(UUID id, String plaintext) {
+		MasterKey folderKey = new MasterKey(new byte[32]);
+		ContentKey key = ContentKey.random();
+		byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
+		try {
+			var lock = new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, "abcdefghijklmnopqrstuv");
+			return NoteEnvelope.seal(id, key, plaintext, Map.of(lock, wrapping));
+		} finally {
+			Arrays.fill(wrapping, (byte) 0);
+			key.destroy();
+			folderKey.destroy();
+		}
 	}
 }

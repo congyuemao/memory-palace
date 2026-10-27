@@ -1,7 +1,8 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
-import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.Ciphertext;
+import com.memorypalace.core.vault.FolderLocks;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
@@ -165,7 +166,7 @@ public final class EditPayloads {
 		// 加密笔记只能通过"解除加密"变回明文（要能用加密功能）；普通保存写入明文会被拒绝，
 		// 防止热重载等情况下界面状态不对，把解密后的内容悄悄以明文存回去
 		boolean wasEncrypted = vault.find(chunk.noteId()).map(NoteSummary::encrypted).orElse(false);
-		if (wasEncrypted && !NoteCipher.isEncrypted(body) && (!decrypt || !CryptoPayloads.allowed(player))) {
+		if (wasEncrypted && !Ciphertext.isEncrypted(body) && (!decrypt || !CryptoPayloads.allowed(player))) {
 			reply(player, chunk, "REFUSED", "");
 			return;
 		}
@@ -176,13 +177,15 @@ public final class EditPayloads {
 		//   被分享了编辑权的人也不能靠伪造一段 MPAL1: 开头的正文把笔记"加密"、把其他编辑者挡在外面）
 		boolean mayCrypt = CryptoPayloads.allowed(player);
 		boolean mayDecrypt = decrypt && mayCrypt;
-		boolean bodyEncrypted = NoteCipher.isEncrypted(body);
+		boolean bodyEncrypted = Ciphertext.isEncrypted(body);
 		NoteAccess.Who who = PalaceAccess.who(player);
 		try {
+			// 被锁的文件夹（文件夹独立密码）里的笔记只能存成密文：防止客户端出错或被骗，把内容以明文存进去
 			Vault.WriteResult result = vault.writeBody(chunk.noteId(), body, guard.isEmpty() ? null : guard,
 					note -> note.canEdit(who) && (note.encrypted()
 							? bodyEncrypted || mayDecrypt
-							: !bodyEncrypted || mayCrypt && NoteAccess.isOwner(note.access(), who)));
+							: !bodyEncrypted || mayCrypt && NoteAccess.isOwner(note.access(), who))
+							&& (bodyEncrypted || mayDecrypt || FolderLocks.lockedFolderOf(vault, note).isEmpty()));
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);

@@ -122,6 +122,76 @@ public class PasswordScreen extends Screen {
 		return screen;
 	}
 
+	/**
+	 * 给文件夹设独立密码：设密码（输两遍）→ 生成文件夹钥匙 → 等服务端确认锁文件已存盘 → 显示恢复密钥（可以不使用）→ onLocked。
+	 * 锁没存成功就放弃，绝不用一个没存下来的文件夹钥匙去加密笔记。onLocked 拿到的 key 由调用方保管。
+	 */
+	public static PasswordScreen setupFolder(String folder, Screen returnTo, java.util.function.Consumer<KeyRing.Created> onLocked) {
+		AtomicReference<KeyRing.Created> created = new AtomicReference<>();
+		AtomicReference<char[]> password = new AtomicReference<>();
+		AtomicReference<PasswordScreen> self = new AtomicReference<>();
+		PasswordScreen screen = new PasswordScreen(t("folder_setup_title", folder), t("folder_setup_message", KeyRing.MIN_PASSWORD),
+				new Component[]{t("password"), t("password_again")}, true, returnTo,
+				values -> {
+					Component error = checkNewPassword(values);
+					if (error != null) {
+						return error;
+					}
+					created.set(KeyRing.createFolder(values[0], true));
+					password.set(values[0].clone()); // 选择"不使用恢复密钥"时还要用一次
+					return null;
+				},
+				() -> {
+					KeyRing.Created c = created.get();
+					self.get().waitFor(t("saving_folder_lock"));
+					FolderKeys.writeLock(folder, c.content(), "", ok -> {
+						if (!ok) {
+							c.key().destroy();
+							wipe(password.get());
+							Minecraft.getInstance().gui.setScreen(returnTo);
+							return;
+						}
+						Minecraft.getInstance().gui.setScreen(new RecoveryKeyScreen(c.recoveryKey(),
+								() -> {
+									wipe(password.get());
+									onLocked.accept(c);
+								},
+								() -> {
+									// 不使用恢复密钥：把它从锁里删掉（等确认存盘）
+									try {
+										String without = KeyRing.removeRecovery(c.content(), password.get());
+										FolderKeys.writeLock(folder, without, c.content(), removed -> onLocked.accept(c));
+									} catch (Exception e) {
+										MemoryPalace.LOGGER.error("删除文件夹恢复密钥失败");
+										onLocked.accept(c);
+									} finally {
+										wipe(password.get());
+									}
+								}));
+					});
+				},
+				() -> {
+					if (created.get() != null) {
+						created.get().key().destroy();
+					}
+					wipe(password.get());
+				}, null);
+		self.set(screen);
+		return screen;
+	}
+
+	/** 解锁一个文件夹：输文件夹密码。onKey 拿到文件夹钥匙，由调用方保管（FolderKeys）。 */
+	public static PasswordScreen unlockFolder(String folder, String lock, Screen returnTo, java.util.function.Consumer<MasterKey> onKey) {
+		AtomicReference<MasterKey> key = new AtomicReference<>();
+		return new PasswordScreen(t("folder_unlock_title", folder), t("folder_unlock_message"), new Component[]{t("password")}, true, returnTo,
+				values -> {
+					key.set(KeyRing.unlock(lock, values[0]));
+					return null;
+				},
+				() -> onKey.accept(key.get()),
+				() -> destroy(key.get()), null);
+	}
+
 	/** 解锁：输密码。钥匙圈里有恢复密钥时显示"忘记密码？"。 */
 	public static PasswordScreen unlock(String keyring, Screen returnTo, Runnable then) {
 		AtomicReference<MasterKey> key = new AtomicReference<>();

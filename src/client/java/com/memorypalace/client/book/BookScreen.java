@@ -2,6 +2,7 @@ package com.memorypalace.client.book;
 
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.crypto.ClientKeys;
+import com.memorypalace.client.crypto.NoteSealers;
 import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -194,7 +195,7 @@ public abstract class BookScreen extends Screen {
 	 * 每次（重新）打开都检查一遍。子类在 init 开头调用，返回 true 时直接 return。
 	 */
 	protected boolean closeIfLocked() {
-		if (encrypted && !ClientKeys.unlocked()) {
+		if (encrypted && !NoteSealers.available(noteId)) {
 			this.minecraft.execute(() -> this.minecraft.gui.setScreen(null));
 			return true;
 		}

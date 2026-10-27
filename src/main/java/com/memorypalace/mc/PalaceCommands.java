@@ -1,6 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
+import com.memorypalace.core.vault.FolderLocks;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.NoteSummary;
@@ -101,6 +102,12 @@ public final class PalaceCommands {
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
 										.executes(ctx -> crypto(ctx, false))))
+						// 文件夹独立密码：给一个文件夹单独设密码，里面的笔记用文件夹钥匙加密，保险库密码打不开
+						.then(Commands.literal("lockfolder")
+								.requires(PalaceCommands::canCrypto)
+								.then(Commands.argument("folder", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(folderSuggestions(ctx.getSource()), builder))
+										.executes(PalaceCommands::lockFolder)))
 						.then(Commands.literal("lock").requires(PalaceCommands::canCrypto).executes(ctx -> {
 							CryptoPayloads.sendAction(ctx.getSource().getPlayerOrException(), new UUID(0, 0), "lock", "", "");
 							return 1;
@@ -248,6 +255,19 @@ public final class PalaceCommands {
 		String input = StringArgumentType.getString(ctx, "path").strip();
 		String path = admin ? input : personalFolder(player) + "/" + input;
 		UUID owner = PalaceAccess.isHost(player) ? null : player.getUUID();
+		// 建在被锁的文件夹里：只有能管这个文件夹的人能建，建好马上用文件夹钥匙加密
+		Optional<String> locked;
+		try {
+			String parent = path.replace('\\', '/');
+			parent = parent.contains("/") ? parent.substring(0, parent.lastIndexOf('/')) : "";
+			locked = FolderLocks.lockedFolder(vault, parent);
+		} catch (IllegalArgumentException e) {
+			locked = Optional.empty(); // 路径不合法：交给 createNote 报错
+		}
+		if (locked.isPresent() && !FolderPayloads.mayManage(player, locked.get())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_denied"));
+			return 0;
+		}
 		NoteSummary note;
 		String body;
 		try {
@@ -262,7 +282,9 @@ public final class PalaceCommands {
 			return 0;
 		}
 		player.getInventory().placeItemBackInInventory(NoteBooks.create(note), Prediction.SERVER_ONLY);
-		if (secret) {
+		if (locked.isPresent()) {
+			CryptoPayloads.sendAction(player, note.id(), "encrypt_new_folder", note.title(), body);
+		} else if (secret) {
 			CryptoPayloads.sendAction(player, note.id(), "encrypt_new", note.title(), body);
 		} else {
 			// 新建的笔记只有一行标题，一定在 MAX_BODY 以内
@@ -599,6 +621,69 @@ public final class PalaceCommands {
 	// 聊天里给出的笔记路径（去掉 .md），对方可以直接 /palace give 它
 	private static String noteCommandPath(NoteSummary note) {
 		return note.relativePath().substring(0, note.relativePath().length() - 3);
+	}
+
+	/**
+	 * /palace lockfolder &lt;文件夹&gt;：给文件夹单独设密码。这里只检查能不能锁，通过后让客户端设密码、写锁文件，
+	 * 再由客户端请求把里面的笔记逐篇加密（见 FolderPayloads）。普通玩家输入的路径相对自己的个人区。
+	 */
+	private static int lockFolder(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		String input = StringArgumentType.getString(ctx, "folder").strip().replace('\\', '/');
+		while (input.endsWith("/")) {
+			input = input.substring(0, input.length() - 1);
+		}
+		String mine = personalFolder(player) + "/" + input;
+		String folder = !input.isEmpty() && java.nio.file.Files.isDirectory(vault.root().resolve(mine)) ? mine : input;
+		try {
+			if (!FolderPayloads.mayManage(player, folder)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_denied"));
+				return 0;
+			}
+			if (!java.nio.file.Files.isDirectory(vault.root().resolve(folder))) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", input));
+				return 0;
+			}
+			if (FolderLocks.lockedFolder(vault, folder).isPresent() || FolderPayloads.hasLockInside(vault, folder)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_already_locked"));
+				return 0;
+			}
+			NoteAccess.Who who = PalaceAccess.who(player);
+			if (FolderPayloads.notesIn(vault, folder).stream().anyMatch(n -> !NoteAccess.isOwner(n.access(), who))) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_not_all_yours"));
+				return 0;
+			}
+		} catch (IOException | IllegalArgumentException e) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", input));
+			return 0;
+		}
+		CryptoPayloads.sendAction(player, new UUID(0, 0), "lock_folder", folder, "");
+		return 1;
+	}
+
+	// /palace lockfolder 的补全：自己能锁的、还没锁的、有笔记的文件夹
+	private static List<String> folderSuggestions(CommandSourceStack source) {
+		Vault vault = PalaceServer.vault();
+		ServerPlayer player = source.getPlayer();
+		if (vault == null || player == null) {
+			return List.of();
+		}
+		var out = new java.util.TreeSet<String>();
+		for (NoteSummary note : vault.list()) {
+			String f = note.folder();
+			while (!f.isEmpty()) {
+				if (FolderPayloads.mayManage(player, f)) {
+					out.add(f);
+				}
+				int slash = f.lastIndexOf('/');
+				f = slash < 0 ? "" : f.substring(0, slash);
+			}
+		}
+		return List.copyOf(out);
 	}
 
 	/** /palace reload：重读 config/memorypalace-server.toml，并把命令列表重新发给在线玩家（能用的命令可能变了）。 */

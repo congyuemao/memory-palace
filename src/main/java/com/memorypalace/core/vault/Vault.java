@@ -1,5 +1,6 @@
 package com.memorypalace.core.vault;
 
+import com.memorypalace.core.crypto.Ciphertext;
 import com.memorypalace.core.crypto.NoteCipher;
 
 import java.io.IOException;
@@ -97,7 +98,7 @@ public final class Vault {
 			}
 			FrontMatter.Parsed parsed = FrontMatter.parse(text);
 			UUID id = parsed.id();
-			boolean encrypted = parsed.fields().containsKey("palace-encrypted") || NoteCipher.isEncrypted(parsed.body());
+			boolean encrypted = parsed.fields().containsKey("palace-encrypted") || Ciphertext.isEncrypted(parsed.body());
 			if (encrypted && (id == null || newIndex.containsKey(id))) {
 				// 加密笔记的密文绑定了原来的 ID：绝不能改它的 ID（改了就再也解不开）。
 				// 重复或缺 ID 的加密文件先不收录，原样保留在硬盘上
@@ -126,7 +127,7 @@ public final class Vault {
 
 	/** 从解析好的文件内容做一张目录卡片（scan 和 readNote 共用，保证两边算法一样）。 */
 	private static NoteSummary summarize(UUID id, String relativePath, FrontMatter.Parsed parsed) {
-		boolean encrypted = parsed.fields().containsKey("palace-encrypted") || NoteCipher.isEncrypted(parsed.body());
+		boolean encrypted = parsed.fields().containsKey("palace-encrypted") || Ciphertext.isEncrypted(parsed.body());
 		String name = relativePath.substring(relativePath.lastIndexOf('/') + 1);
 		// 标记存在即隐藏正文标题，即使文件内容不一致也不能泄露标题。
 		String title = encrypted ? name.substring(0, name.length() - 3) : parsed.body().lines()
@@ -399,7 +400,7 @@ public final class Vault {
 						// 正文是原文的后缀，直接截取可保留字段格式、注释和空白。
 						String frontMatter = text.substring(text.startsWith("\uFEFF") ? 1 : 0,
 								text.length() - parsed.body().length());
-						frontMatter = withEncryptionFlag(frontMatter, NoteCipher.isEncrypted(body), newline);
+						frontMatter = withEncryptionFlag(frontMatter, Ciphertext.isEncrypted(body), newline);
 						if (!body.isEmpty() && !frontMatter.endsWith("\n")) {
 							frontMatter += newline;
 						}

@@ -57,6 +57,9 @@ public final class KeyRing {
 	// 收件箱钥匙（可选，两个字段一起出现）：box.public = 公钥（X.509，明文，随手记加密用，不需要密码）；
 	// box.wrap = 用主密钥派生的钥匙包好的私钥（PKCS#8），AAD 绑定公钥
 	private static final Set<String> BOX_FIELDS = Set.of("box.public", "box.wrap");
+	// 文件夹钥匙的 ID（只有文件夹的锁才有，见 createFolder）：写进 MPAL2 笔记的 f 锁里，用来找到是哪一把
+	private static final String FOLDER_ID = "folder.id";
+	private static final java.util.regex.Pattern FOLDER_ID_PATTERN = java.util.regex.Pattern.compile("[A-Za-z0-9_-]{22}");
 
 	private KeyRing() {}
 
@@ -90,6 +93,37 @@ public final class KeyRing {
 		} finally {
 			NoteCipher.wipe(secret);
 		}
+	}
+
+	/**
+	 * 新建一把文件夹钥匙（文件夹独立密码）：格式和钥匙圈一样（密码锁 + 可选的恢复密钥），
+	 * 另外带一个随机的 folder.id，不带收件箱钥匙。返回的 key 就是文件夹钥匙。
+	 */
+	public static Created createFolder(char[] password, boolean withRecovery) {
+		checkPassword(password);
+		byte[] secret = randomBytes(MasterKey.LENGTH);
+		MasterKey key = null;
+		try {
+			Map<String, String> fields = new LinkedHashMap<>();
+			fields.put("version", "1");
+			fields.put(FOLDER_ID, Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes(16)));
+			setPassword(fields, secret, password);
+			String recovery = withRecovery ? setRecovery(fields, secret) : null;
+			key = new MasterKey(secret);
+			return new Created(serialize(fields), key, recovery);
+		} catch (RuntimeException | Error e) {
+			if (key != null) {
+				key.destroy();
+			}
+			throw e;
+		} finally {
+			NoteCipher.wipe(secret);
+		}
+	}
+
+	/** 文件夹钥匙的 ID；不是文件夹钥匙（普通钥匙圈）时为 null。 */
+	public static String folderId(String content) {
+		return parse(content).get(FOLDER_ID);
 	}
 
 	/** 用密码解锁。 */
@@ -189,8 +223,8 @@ public final class KeyRing {
 	 */
 	public static String withBox(String content, MasterKey key) {
 		Map<String, String> fields = parse(content);
-		if (fields.containsKey("box.public")) {
-			return content;
+		if (fields.containsKey("box.public") || fields.containsKey(FOLDER_ID)) {
+			return content; // 文件夹钥匙不需要收件箱钥匙
 		}
 		byte[] secret = NoteCipher.copyKey(key);
 		try {
@@ -361,7 +395,8 @@ public final class KeyRing {
 				throw invalidContent();
 			}
 			String name = line.substring(0, equals);
-			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name) && !BOX_FIELDS.contains(name))
+			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name) && !BOX_FIELDS.contains(name)
+					&& !FOLDER_ID.equals(name))
 					|| fields.putIfAbsent(name, line.substring(equals + 1)) != null) {
 				throw invalidContent();
 			}
@@ -387,8 +422,11 @@ public final class KeyRing {
 			decode(fields.get("recovery.salt"), 16);
 			decode(fields.get("recovery.wrap"), 60);
 		}
+		if (fields.containsKey(FOLDER_ID) && !FOLDER_ID_PATTERN.matcher(fields.get(FOLDER_ID)).matches()) {
+			throw invalidContent();
+		}
 		if (BOX_FIELDS.stream().anyMatch(fields::containsKey)) {
-			if (!fields.keySet().containsAll(BOX_FIELDS)) {
+			if (!fields.keySet().containsAll(BOX_FIELDS) || fields.containsKey(FOLDER_ID)) {
 				throw invalidContent();
 			}
 			byte[] publicKey = decode(fields.get("box.public"), 44);

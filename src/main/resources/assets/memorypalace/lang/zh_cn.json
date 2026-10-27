@@ -214,5 +214,22 @@
 	"settings.memorypalace.trust_box_message": "本机记住的：%s\n服务器上的：%s\n只有确认是自己重设过钥匙圈、换了电脑等原因时才信任。",
 	"settings.memorypalace.trust_box_unknown": "（还没有记录）",
 	"settings.memorypalace.trust_box_done": "已改为信任新的收件箱公钥",
-	"settings.memorypalace.trust_box_kept": "没有改动"
+	"settings.memorypalace.trust_box_kept": "没有改动",
+	"command.memorypalace.folder_denied": "不能给这个文件夹设密码：只能锁自己个人区里的文件夹（个人区本身和收件箱不行）",
+	"command.memorypalace.folder_already_locked": "这个文件夹（或它上面、下面的文件夹）已经设过密码了",
+	"command.memorypalace.folder_not_all_yours": "文件夹里有不是你写的笔记，不能设密码",
+	"command.memorypalace.folder_too_long": "有 %s 篇笔记太长（超过 %s 字），没有加密，请拆分后重新设置",
+	"message.memorypalace.folder_lock_unavailable": "找不到这个文件夹的锁，无法解锁",
+	"message.memorypalace.folder_lock_mismatch": "文件夹的锁和这篇笔记对不上，无法解锁",
+	"message.memorypalace.folder_lock_conflict": "文件夹的锁已被修改，本次操作没有保存，请重试",
+	"message.memorypalace.folder_lock_write_failed": "保存文件夹的锁失败，请查看游戏日志",
+	"message.memorypalace.folder_locked": "文件夹已设好密码，正在加密里面的笔记……",
+	"message.memorypalace.folder_encrypt_failed": "有笔记没能用文件夹密码加密，请查看游戏日志",
+	"message.memorypalace.folder_note_decrypt": "文件夹里的笔记不能单独解除加密",
+	"screen.memorypalace.save_locked": "已上锁，没有保存：关掉后重新打开这篇（输入文件夹密码）即可恢复刚才的内容",
+	"crypto.memorypalace.folder_setup_title": "给文件夹「%s」设密码",
+	"crypto.memorypalace.folder_setup_message": "这个密码只用来打开这个文件夹里的笔记，和保险库密码无关，保险库密码打不开它们。\n至少 %s 位，请牢记：忘记密码又没有恢复密钥时，这些笔记将永久打不开。",
+	"crypto.memorypalace.saving_folder_lock": "正在保存文件夹的锁……",
+	"crypto.memorypalace.folder_unlock_title": "解锁文件夹「%s」",
+	"crypto.memorypalace.folder_unlock_message": "请输入这个文件夹的密码"
 }

@@ -214,5 +214,22 @@
 	"settings.memorypalace.trust_box_message": "Remembered: %s\nOn the server: %s\nOnly trust it if you know why it changed (you reset your keyring, switched computers, ...).",
 	"settings.memorypalace.trust_box_unknown": "(none yet)",
 	"settings.memorypalace.trust_box_done": "Now trusting the new inbox key",
-	"settings.memorypalace.trust_box_kept": "Nothing changed"
+	"settings.memorypalace.trust_box_kept": "Nothing changed",
+	"command.memorypalace.folder_denied": "You cannot set a password on this folder: you can only lock folders inside your own personal area (not the area itself or the inbox)",
+	"command.memorypalace.folder_already_locked": "This folder (or a folder above or below it) already has a password",
+	"command.memorypalace.folder_not_all_yours": "This folder contains notes you did not write, so it cannot be locked",
+	"command.memorypalace.folder_too_long": "%s notes are too long (over %s characters) and were not encrypted; please split them and lock again",
+	"message.memorypalace.folder_lock_unavailable": "Could not find this folder's lock, so it cannot be unlocked",
+	"message.memorypalace.folder_lock_mismatch": "The folder lock does not match this note, so it cannot be unlocked",
+	"message.memorypalace.folder_lock_conflict": "The folder lock was changed elsewhere; nothing was saved. Please try again",
+	"message.memorypalace.folder_lock_write_failed": "Failed to save the folder lock. See the game log",
+	"message.memorypalace.folder_locked": "Folder password set; encrypting the notes inside…",
+	"message.memorypalace.folder_encrypt_failed": "Some notes could not be encrypted with the folder password. See the game log",
+	"message.memorypalace.folder_note_decrypt": "Notes in a password-protected folder cannot be decrypted one by one",
+	"screen.memorypalace.save_locked": "Locked, not saved: close and reopen this note (enter the folder password) to get your changes back",
+	"crypto.memorypalace.folder_setup_title": "Set a password for folder \"%s\"",
+	"crypto.memorypalace.folder_setup_message": "This password only opens the notes in this folder. It is separate from your vault password, which cannot open them.\nAt least %s characters. Remember it: if you forget it and have no recovery key, these notes can never be opened again.",
+	"crypto.memorypalace.saving_folder_lock": "Saving the folder lock…",
+	"crypto.memorypalace.folder_unlock_title": "Unlock folder \"%s\"",
+	"crypto.memorypalace.folder_unlock_message": "Enter this folder's password"
 }

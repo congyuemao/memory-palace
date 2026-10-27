@@ -1,7 +1,7 @@
 package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
-import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.Ciphertext;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -198,7 +198,7 @@ public final class CryptoPayloads {
 				return;
 			}
 			NoteSummary note = read.get().note();
-			if (!note.encrypted() || !NoteCipher.isEncrypted(read.get().body())) {
+			if (!note.encrypted() || !Ciphertext.isEncrypted(read.get().body())) {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.not_encrypted", note.title()));
 				return;
 			}

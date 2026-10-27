@@ -5,6 +5,7 @@ import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.CryptoClient;
+import com.memorypalace.client.crypto.NoteSealers;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.OpenNotePayload;
@@ -124,7 +125,7 @@ public class NoteScreen extends BookScreen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		if (encrypted && !ClientKeys.unlocked()) {
+		if (encrypted && !NoteSealers.available(noteId)) {
 			return; // 已上锁：一帧都不画明文（界面马上会被关掉）
 		}
 		int leftIndex = spread * 2;

@@ -5,7 +5,7 @@ import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.NoteSaver;
-import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.client.crypto.NoteSealers;
 import com.memorypalace.core.crypto.WrongKeyException;
 import com.memorypalace.core.editor.UndoHistory;
 import com.memorypalace.core.vault.Vault;
@@ -55,6 +55,8 @@ public class EditorScreen extends BookScreen {
 	// 撤销 / 重做历史；重新 init（改窗口大小）时不丢
 	private final UndoHistory history;
 	private boolean applyingHistory;
+	// 文件夹里的笔记（MPAL2，用文件夹钥匙加密）：上锁后不能在这里补输保险库密码来保存
+	private final boolean folderNote;
 
 	public EditorScreen(UUID noteId, Component title, String body) {
 		this(noteId, title, body, false, Vault.hash(body));
@@ -69,16 +71,17 @@ public class EditorScreen extends BookScreen {
 			restoreDraft();
 		}
 		this.history = new UndoHistory(this.text);
+		this.folderNote = encrypted && NoteSealers.isEnvelope(noteId);
 	}
 
 	/** 上次上锁前有没保存成功的草稿：解密后放回编辑框（标记为未保存）。 */
 	private void restoreDraft() {
 		String draft = ClientKeys.takeDraft(noteId);
-		if (draft == null || !ClientKeys.unlocked()) {
+		if (draft == null || !NoteSealers.available(noteId)) {
 			return;
 		}
 		try {
-			this.text = NoteCipher.decrypt(ClientKeys.key(), noteId, draft);
+			this.text = NoteSealers.open(noteId, draft);
 			this.status = Component.translatable("screen.memorypalace.draft_restored");
 		} catch (WrongKeyException e) {
 			// 草稿解不开就算了，文件里的内容还在
@@ -160,7 +163,12 @@ public class EditorScreen extends BookScreen {
 		if (saving) {
 			return;
 		}
-		if (encrypted && !ClientKeys.unlocked()) {
+		if (encrypted && !NoteSealers.available(noteId)) {
+			if (folderNote) {
+				// 文件夹笔记的内容钥匙上锁时已经清零：没法在这里补输文件夹密码，草稿已暂存，重新打开这篇即可恢复
+				status = Component.translatable("screen.memorypalace.save_locked");
+				return;
+			}
 			// 编辑时自动上锁了：先解锁再保存
 			ClientKeys.requireUnlocked(this, () -> {
 				this.minecraft.gui.setScreen(this);
@@ -169,14 +177,19 @@ public class EditorScreen extends BookScreen {
 			return;
 		}
 		String body = text;
-		String stored = encrypted ? NoteCipher.encrypt(ClientKeys.key(), noteId, body) : body;
+		String stored = encrypted ? NoteSealers.seal(noteId, body) : body;
 		send(body, stored, force);
 	}
 
 	private void send(String body, String stored, boolean force) {
 		saving = true;
 		status = Component.translatable("screen.memorypalace.saving");
-		NoteSaver.save(noteId, stored, force ? null : baseHash, result -> onSaveResult(result, body));
+		NoteSaver.save(noteId, stored, force ? null : baseHash, result -> {
+			if ("OK".equals(result.result()) && encrypted) {
+				NoteSealers.saved(noteId, stored);
+			}
+			onSaveResult(result, body);
+		});
 	}
 
 	/**
@@ -184,11 +197,11 @@ public class EditorScreen extends BookScreen {
 	 * 保存成功会删掉草稿；失败的话下次解锁后打开编辑器会恢复它。
 	 */
 	public void stashDraftAndSave() {
-		if (!encrypted || !dirty() || !ClientKeys.unlocked()) {
+		if (!encrypted || !dirty() || !NoteSealers.available(noteId)) {
 			return;
 		}
 		String body = text;
-		String cipher = NoteCipher.encrypt(ClientKeys.key(), noteId, body);
+		String cipher = NoteSealers.seal(noteId, body);
 		ClientKeys.stashDraft(noteId, cipher);
 		if (!saving) {
 			send(body, cipher, false);
@@ -346,7 +359,7 @@ public class EditorScreen extends BookScreen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		if (encrypted && !ClientKeys.unlocked()) {
+		if (encrypted && !NoteSealers.available(noteId)) {
 			return; // 已上锁：一帧都不画明文（界面马上会被关掉）
 		}
 		refreshPreviewIfNeeded();

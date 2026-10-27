@@ -21,7 +21,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.gameevent.GameEvent;
-import com.memorypalace.core.crypto.NoteCipher;
+import com.memorypalace.core.crypto.Ciphertext;
 import com.memorypalace.core.vault.NoteLocations;
 import net.minecraft.world.level.block.ChiseledBookShelfBlock;
 import net.minecraft.world.level.block.LecternBlock;
@@ -241,7 +241,7 @@ public final class PalaceInteractions {
 			Optional<String> body = Optional.of(read.get().body());
 			// 文件开头标着"已加密"，正文却不是密文（比如在外部编辑器里被改成了明文）：
 			// 不能当普通笔记打开，否则会绕过加密的所有保护
-			if (note.get().encrypted() != NoteCipher.isEncrypted(body.get())) {
+			if (note.get().encrypted() != Ciphertext.isEncrypted(body.get())) {
 				if (!refresh) {
 					player.sendSystemMessage(Component.translatable("message.memorypalace.encryption_mismatch"));
 				}

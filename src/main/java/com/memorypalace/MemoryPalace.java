@@ -2,6 +2,7 @@ package com.memorypalace;
 
 import com.memorypalace.mc.CryptoPayloads;
 import com.memorypalace.mc.EditPayloads;
+import com.memorypalace.mc.FolderPayloads;
 import com.memorypalace.mc.ImagePayloads;
 import com.memorypalace.mc.OpenNotePayload;
 import com.memorypalace.mc.PalaceCommands;
@@ -30,6 +31,7 @@ public class MemoryPalace implements ModInitializer {
 		ImagePayloads.register();
 		EditPayloads.register();
 		CryptoPayloads.register();
+		FolderPayloads.register();
 		ToolPayloads.register();
 		PalaceServer.register();
 		PalaceInteractions.register();

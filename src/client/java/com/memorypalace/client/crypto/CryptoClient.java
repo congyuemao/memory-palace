@@ -2,13 +2,18 @@ package com.memorypalace.client.crypto;
 
 import com.memorypalace.client.EditorScreen;
 import com.memorypalace.client.NoteScreen;
+import com.memorypalace.core.crypto.Ciphertext;
+import com.memorypalace.core.crypto.ContentKey;
 import com.memorypalace.core.crypto.InboxCipher;
+import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.crypto.MasterKey;
+import com.memorypalace.core.crypto.NoteEnvelope;
 import com.memorypalace.core.crypto.NoteCipher;
 import com.memorypalace.core.crypto.WrongKeyException;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.CryptoPayloads;
 import com.memorypalace.mc.EditPayloads;
+import com.memorypalace.mc.FolderPayloads;
 import com.memorypalace.mc.OpenNotePayload;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -19,6 +24,7 @@ import net.minecraft.network.chat.Component;
 
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -64,6 +70,16 @@ public final class CryptoClient {
 
 	private static DecryptIntent decryptIntent;
 
+	// 文件夹独立密码：服务端发来"给这个文件夹设密码"，要是玩家 10 秒内亲手输入过 /palace lockfolder；
+	// 设好之后 2 分钟内，服务端逐篇发来的"用这把文件夹钥匙加密这篇"才认（钥匙 ID 记在 folderEncryptLock）
+	private static boolean lockFolderRequested;
+	private static long lockFolderRequestedAt;
+	private static final long FOLDER_ENCRYPT_NANOS = 120_000_000_000L;
+	private static String folderEncryptLock;
+	private static long folderEncryptAt;
+	// 加密文件夹时遇到的旧格式 MPAL1 笔记：要先解锁保险库才能解开再改用文件夹钥匙；保险库还锁着时先排队，解锁一次后一起处理
+	private static final java.util.List<CryptoPayloads.Action> WAITING_FOR_VAULT = new java.util.ArrayList<>();
+
 	private CryptoClient() {}
 
 	public static void register() {
@@ -72,6 +88,9 @@ public final class CryptoClient {
 		ClientPlayNetworking.registerGlobalReceiver(CryptoPayloads.KeyringWriteResult.TYPE,
 				(payload, context) -> ClientKeys.onKeyringWriteResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(CryptoPayloads.Action.TYPE, (payload, context) -> handle(payload));
+		ClientPlayNetworking.registerGlobalReceiver(FolderPayloads.LockData.TYPE, (payload, context) -> FolderKeys.onLockData(payload));
+		ClientPlayNetworking.registerGlobalReceiver(FolderPayloads.LockWriteResult.TYPE,
+				(payload, context) -> FolderKeys.onLockWriteResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenNotePayload.TYPE, (payload, context) -> receive(payload));
 		// 命令文本不带开头的 "/"
 		ClientSendMessageEvents.COMMAND.register(command -> {
@@ -82,6 +101,9 @@ public final class CryptoClient {
 			} else if (c.startsWith("palace encrypt ") || c.startsWith("palace newsecret ")) {
 				encryptRequested = true;
 				encryptRequestedAt = System.nanoTime();
+			} else if (c.startsWith("palace lockfolder ")) {
+				lockFolderRequested = true;
+				lockFolderRequestedAt = System.nanoTime();
 			}
 		});
 		// 离开世界一律上锁，丢掉没收完的东西
@@ -89,6 +111,8 @@ public final class CryptoClient {
 			INCOMING.clear();
 			KNOWN_ENCRYPTED.clear();
 			decryptIntent = null;
+			folderEncryptLock = null;
+			WAITING_FOR_VAULT.clear();
 			InboxCapture.reset();
 			ClientKeys.disconnect();
 		}));
@@ -104,7 +128,7 @@ public final class CryptoClient {
 	public static void openEditor(EditPayloads.OpenEditor payload) {
 		boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
 		newNoteRequested = false;
-		if (!requested || KNOWN_ENCRYPTED.contains(payload.noteId()) || NoteCipher.isEncrypted(payload.body())
+		if (!requested || KNOWN_ENCRYPTED.contains(payload.noteId()) || Ciphertext.isEncrypted(payload.body())
 				|| InboxCipher.hasSealedLines(payload.body())) {
 			return;
 		}
@@ -165,7 +189,7 @@ public final class CryptoClient {
 	private static void openNote(UUID id, Component title, String stored, boolean refresh, boolean editable) {
 		Minecraft mc = Minecraft.getInstance();
 		String storedHash = Vault.hash(stored);
-		boolean encrypted = NoteCipher.isEncrypted(stored) || InboxCipher.hasSealedLines(stored);
+		boolean encrypted = Ciphertext.isEncrypted(stored) || InboxCipher.hasSealedLines(stored);
 		if (!encrypted && KNOWN_ENCRYPTED.contains(id)) {
 			// 这篇刚才还是加密的，现在服务端发来明文：关掉、提醒，不默默当普通笔记打开
 			if (mc.gui.screen() instanceof NoteScreen open && id.equals(open.noteId())) {
@@ -188,7 +212,7 @@ public final class CryptoClient {
 				openNote(id, title, stored, false, editable);
 			} else if (!encrypted) {
 				open.updateBody(stored, storedHash);
-			} else if (ClientKeys.unlocked()) {
+			} else if (canDecryptNow(stored)) {
 				decrypt(id, stored).ifPresent(plain -> open.updateBody(plain, storedHash));
 			}
 			return;
@@ -197,10 +221,10 @@ public final class CryptoClient {
 			mc.gui.setScreen(new NoteScreen(id, title, stored, false, storedHash, editable));
 			return;
 		}
-		ClientKeys.requireUnlocked(null, () -> decrypt(id, stored).ifPresentOrElse(
+		unlockFor(id, stored, () -> decrypt(id, stored).ifPresentOrElse(
 				plain -> {
 					// 真的用自己的钥匙解开了，才算"已知的加密笔记"。收件箱随手记不算：别人有公钥也能往里加密文行
-					if (NoteCipher.isEncrypted(stored)) {
+					if (Ciphertext.isEncrypted(stored)) {
 						rememberEncrypted(id);
 					}
 					mc.gui.setScreen(new NoteScreen(id, title, plain, true, storedHash, editable));
@@ -208,7 +232,59 @@ public final class CryptoClient {
 				() -> mc.gui.setScreen(null)));
 	}
 
+	/** 这篇需要的钥匙：MPAL2 文件夹笔记要文件夹钥匙（输文件夹密码），其余要保险库主密钥。 */
+	private static void unlockFor(UUID id, String stored, Runnable then) {
+		String folderLock = NoteEnvelope.isEnvelope(stored) ? folderLockOf(stored) : null;
+		if (folderLock != null) {
+			FolderKeys.require(id, folderLock, null, then);
+		} else if (NoteEnvelope.isEnvelope(stored)) {
+			PasswordScreen.tell("message.memorypalace.decrypt_failed"); // 不认识的锁（以后的单篇密码等）
+		} else {
+			ClientKeys.requireUnlocked(null, then);
+		}
+	}
+
+	/** 现在手里的钥匙能不能直接解开（热重载时用，不弹密码框）。 */
+	private static boolean canDecryptNow(String stored) {
+		if (NoteEnvelope.isEnvelope(stored)) {
+			String lock = folderLockOf(stored);
+			return lock != null && FolderKeys.get(lock) != null;
+		}
+		return ClientKeys.unlocked();
+	}
+
+	/** MPAL2 笔记里文件夹锁的 ID；没有文件夹锁或格式不对时为 null。 */
+	private static String folderLockOf(String envelope) {
+		try {
+			return NoteEnvelope.locks(envelope).stream().filter(l -> l.kind() == NoteEnvelope.Kind.FOLDER)
+					.map(NoteEnvelope.Lock::id).findFirst().orElse(null);
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
+	}
+
 	private static Optional<String> decrypt(UUID noteId, String stored) {
+		if (NoteEnvelope.isEnvelope(stored)) {
+			// 文件夹笔记：用文件夹钥匙取出这篇的内容钥匙，记下来（保存时用它再加密）
+			String lock = folderLockOf(stored);
+			MasterKey folderKey = lock == null ? null : FolderKeys.get(lock);
+			if (folderKey == null) {
+				PasswordScreen.tell("message.memorypalace.decrypt_failed");
+				return Optional.empty();
+			}
+			byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
+			try {
+				ContentKey contentKey = NoteEnvelope.unlock(noteId, stored, new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lock), wrapping);
+				String plain = NoteEnvelope.decrypt(noteId, stored, contentKey);
+				NoteSealers.remember(noteId, contentKey, stored);
+				return Optional.of(plain);
+			} catch (WrongKeyException e) {
+				PasswordScreen.tell("message.memorypalace.decrypt_failed");
+				return Optional.empty();
+			} finally {
+				java.util.Arrays.fill(wrapping, (byte) 0);
+			}
+		}
 		if (!NoteCipher.isEncrypted(stored)) {
 			// 收件箱随手记：用解锁时解出来的收件箱私钥
 			String plain = ClientKeys.openSealed(stored);
@@ -234,6 +310,21 @@ public final class CryptoClient {
 		String body = action.body();
 		switch (action.action()) {
 			case "lock" -> ClientKeys.lock(true);
+			case "lock_folder" -> {
+				boolean requested = lockFolderRequested && System.nanoTime() - lockFolderRequestedAt <= NEW_NOTE_INTENT_NANOS;
+				lockFolderRequested = false;
+				if (requested) {
+					lockFolder(action.title());
+				}
+			}
+			case "encrypt_folder" -> encryptFolderNote(action);
+			case "encrypt_new_folder" -> {
+				boolean requested = newNoteRequested && System.nanoTime() - newNoteRequestedAt <= NEW_NOTE_INTENT_NANOS;
+				newNoteRequested = false;
+				if (requested) {
+					newFolderNote(id, title, body);
+				}
+			}
 			case "encrypt", "encrypt_new" -> {
 				boolean requested = encryptRequested && System.nanoTime() - encryptRequestedAt <= NEW_NOTE_INTENT_NANOS;
 				encryptRequested = false;
@@ -248,6 +339,11 @@ public final class CryptoClient {
 					PasswordScreen.tell("message.memorypalace.decrypt_unrequested");
 					return;
 				}
+				if (NoteEnvelope.isEnvelope(body)) {
+					// 文件夹里的笔记不能单独解除加密（服务端也不让在被锁的文件夹里存明文）；要整个文件夹解除密码
+					PasswordScreen.tell("message.memorypalace.folder_note_decrypt");
+					return;
+				}
 				ClientKeys.withKeyring(keyring -> {
 					if (keyring.isEmpty()) {
 						PasswordScreen.tell("message.memorypalace.no_keyring");
@@ -259,6 +355,116 @@ public final class CryptoClient {
 			}
 			default -> {}
 		}
+	}
+
+	// ---- 文件夹独立密码 ----
+
+	/** /palace lockfolder：设文件夹密码 → 锁文件存好 → 请服务端把文件夹里的笔记逐篇发来加密。 */
+	private static void lockFolder(String folder) {
+		Minecraft mc = Minecraft.getInstance();
+		mc.gui.setScreen(PasswordScreen.setupFolder(folder, null, created -> {
+			String lockId = KeyRing.folderId(created.content());
+			FolderKeys.put(lockId, created.key());
+			folderEncryptLock = lockId;
+			folderEncryptAt = System.nanoTime();
+			PasswordScreen.tell("message.memorypalace.folder_locked");
+			mc.gui.setScreen(null);
+			ClientPlayNetworking.send(new FolderPayloads.EncryptAll(folder));
+		}));
+	}
+
+	/** 服务端发来文件夹里的一篇（明文或旧格式 MPAL1）：用刚设好的文件夹钥匙重新加密后存回去。 */
+	private static void encryptFolderNote(CryptoPayloads.Action action) {
+		String lockId = folderEncryptLock;
+		if (lockId == null || System.nanoTime() - folderEncryptAt > FOLDER_ENCRYPT_NANOS) {
+			return; // 不是刚锁好文件夹时发来的：不认
+		}
+		MasterKey folderKey = FolderKeys.get(lockId);
+		if (folderKey == null) {
+			PasswordScreen.tell("message.memorypalace.folder_encrypt_failed");
+			return;
+		}
+		String body = action.body();
+		if (NoteEnvelope.isEnvelope(body)) {
+			return; // 已经是新格式了（比如又被锁在了别的文件夹里）：不动
+		}
+		if (NoteCipher.isEncrypted(body)) {
+			// 旧格式加密笔记：要先用保险库主密钥解开。保险库还锁着时排队，解锁一次后一起处理
+			if (!ClientKeys.unlocked()) {
+				WAITING_FOR_VAULT.add(action);
+				if (WAITING_FOR_VAULT.size() == 1) {
+					ClientKeys.requireUnlocked(null, () -> {
+						Minecraft.getInstance().gui.setScreen(null);
+						List<CryptoPayloads.Action> queued = List.copyOf(WAITING_FOR_VAULT);
+						WAITING_FOR_VAULT.clear();
+						folderEncryptAt = System.nanoTime(); // 输密码花的时间不算
+						queued.forEach(CryptoClient::encryptFolderNote);
+					});
+				}
+				return;
+			}
+			try {
+				saveWithFolderLock(action.noteId(), NoteCipher.decrypt(ClientKeys.key(), action.noteId(), body), body, lockId, folderKey, null);
+			} catch (WrongKeyException e) {
+				PasswordScreen.tell("message.memorypalace.folder_encrypt_failed");
+			}
+			return;
+		}
+		saveWithFolderLock(action.noteId(), body, body, lockId, folderKey, null);
+	}
+
+	/** 在被锁的文件夹里新建的笔记：解锁文件夹（需要时输文件夹密码）→ 用文件夹钥匙加密 → 存好后打开编辑器。 */
+	private static void newFolderNote(UUID id, Component title, String body) {
+		Minecraft mc = Minecraft.getInstance();
+		FolderKeys.withLock(id, data -> {
+			String lockId;
+			try {
+				lockId = "ok".equals(data.status()) ? KeyRing.folderId(data.content()) : null;
+			} catch (IllegalArgumentException e) {
+				lockId = null;
+			}
+			if (lockId == null) {
+				PasswordScreen.tell("message.memorypalace.folder_lock_unavailable");
+				return;
+			}
+			String lock = lockId;
+			FolderKeys.require(id, lock, null, () -> saveWithFolderLock(id, body, body, lock, FolderKeys.get(lock), result -> {
+				if ("OK".equals(result.result()) && NoteSealers.isEnvelope(id)) {
+					mc.gui.setScreen(new EditorScreen(id, title, body, true, result.newHash()));
+				} else {
+					mc.gui.setScreen(null);
+				}
+			}));
+		});
+	}
+
+	/**
+	 * 用文件夹钥匙给这篇加密并存回去：新的内容钥匙，只有一把 f 锁（保险库密码打不开）。
+	 * stored 是服务端那边现在的正文（用来核对存的时候没有被别人改过）。存好后记下内容钥匙，之后编辑保存用。
+	 */
+	private static void saveWithFolderLock(UUID id, String plain, String stored, String lockId, MasterKey folderKey,
+			java.util.function.Consumer<EditPayloads.SaveResult> after) {
+		ContentKey contentKey = ContentKey.random();
+		byte[] wrapping = NoteEnvelope.folderWrappingKey(folderKey);
+		String sealed;
+		try {
+			sealed = NoteEnvelope.seal(id, contentKey, plain,
+					java.util.Map.of(new NoteEnvelope.Lock(NoteEnvelope.Kind.FOLDER, lockId), wrapping));
+		} finally {
+			java.util.Arrays.fill(wrapping, (byte) 0);
+		}
+		NoteSaver.save(id, sealed, Vault.hash(stored), result -> {
+			if ("OK".equals(result.result())) {
+				rememberEncrypted(id);
+				NoteSealers.remember(id, contentKey, sealed);
+			} else {
+				contentKey.destroy();
+				PasswordScreen.tell("message.memorypalace.folder_encrypt_failed");
+			}
+			if (after != null) {
+				after.accept(result);
+			}
+		});
 	}
 
 	private static void encrypt(CryptoPayloads.Action action, UUID id, Component title, String body) {
