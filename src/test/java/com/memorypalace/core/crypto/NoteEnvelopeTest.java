@@ -143,13 +143,6 @@ class NoteEnvelopeTest {
 		assertUnlocks(NOTE, replaced, FOLDER, folderKey, "body stays intact");
 		assertThrows(WrongKeyException.class, () -> NoteEnvelope.unlock(NOTE, replaced, USER, wrappingKey));
 
-		String removed = NoteEnvelope.withoutLock(replaced, FOLDER);
-		assertEquals(List.of(USER), NoteEnvelope.locks(removed));
-		assertEquals(payload(original), payload(removed));
-		assertUnlocks(NOTE, removed, USER, replacementKey, "body stays intact");
-		assertThrows(WrongKeyException.class, () -> NoteEnvelope.unlock(NOTE, removed, FOLDER, folderKey));
-		assertEquals(removed, NoteEnvelope.withoutLock(removed, FOLDER));
-		assertThrows(IllegalStateException.class, () -> NoteEnvelope.withoutLock(removed, USER));
 		assertUnlocks(NOTE, original, USER, wrappingKey, "body stays intact");
 	}
 

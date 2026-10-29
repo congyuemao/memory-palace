@@ -15,7 +15,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.RegistryFriendlyByteBuf;
-import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -54,13 +53,9 @@ public final class ToolPayloads {
 	 * 客户端 → 服务端：记进今天的收件箱。localTime 是玩家电脑上的本地时间（ISO 格式、带时区偏移），
 	 * "今天"按玩家所在地算，而不是服务器所在地。
 	 * requestId 是客户端给这条随手记起的编号，服务端用 CaptureResult 回同一个编号；retry = 同一条的重发（见 CaptureService）。
-	 * <p>
-	 * 布局和 0.3.0 的不一样（多了 requestId、retry），所以用新的标识 capture_v2：同一个标识两种布局，
-	 * 新旧版本混用时会按错的布局解码。旧标识 capture 留给 LegacyCapture，服务端认出来后拒绝。
-	 * 以后再改布局，同样换一个新标识。
 	 */
 	public record Capture(UUID requestId, boolean retry, String text, String localTime) implements CustomPacketPayload {
-		public static final Type<Capture> TYPE = new Type<>(MemoryPalace.id("capture_v2"));
+		public static final Type<Capture> TYPE = new Type<>(MemoryPalace.id("capture"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, Capture> CODEC = StreamCodec.composite(
 				UUIDUtil.STREAM_CODEC, Capture::requestId,
 				ByteBufCodecs.BOOL, Capture::retry,
@@ -79,7 +74,7 @@ public final class ToolPayloads {
 	 * 服务端只看得到"哪天记了一条、大概多长"，看不到内容。localTime、requestId、retry 同 Capture。
 	 */
 	public record CaptureSealed(UUID requestId, boolean retry, String line, String localTime) implements CustomPacketPayload {
-		public static final Type<CaptureSealed> TYPE = new Type<>(MemoryPalace.id("capture_sealed_v2"));
+		public static final Type<CaptureSealed> TYPE = new Type<>(MemoryPalace.id("capture_sealed"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, CaptureSealed> CODEC = StreamCodec.composite(
 				UUIDUtil.STREAM_CODEC, CaptureSealed::requestId,
 				ByteBufCodecs.BOOL, CaptureSealed::retry,
@@ -91,46 +86,6 @@ public final class ToolPayloads {
 		public Type<? extends CustomPacketPayload> type() {
 			return TYPE;
 		}
-	}
-
-	/**
-	 * 0.3.0 及更早的客户端发的随手记（标识 capture，只有正文和本地时间，没有编号和回执）。
-	 * 服务端按旧布局解码，不保存，告诉玩家升级客户端：旧客户端收不到 CaptureResult，没法找回重试，
-	 * 保存了也没法去重，所以不能照收。
-	 */
-	public record LegacyCapture(String text, String localTime) implements CustomPacketPayload {
-		public static final Type<LegacyCapture> TYPE = new Type<>(MemoryPalace.id("capture"));
-		public static final StreamCodec<RegistryFriendlyByteBuf, LegacyCapture> CODEC = StreamCodec.composite(
-				ByteBufCodecs.stringUtf8(MAX_CAPTURE), LegacyCapture::text,
-				ByteBufCodecs.stringUtf8(64), LegacyCapture::localTime,
-				LegacyCapture::new);
-
-		@Override
-		public Type<? extends CustomPacketPayload> type() {
-			return TYPE;
-		}
-	}
-
-	/** 0.3.0 及更早的客户端发的加密随手记（标识 capture_sealed）。同 LegacyCapture：认出来，拒绝。 */
-	public record LegacyCaptureSealed(String line, String localTime) implements CustomPacketPayload {
-		public static final Type<LegacyCaptureSealed> TYPE = new Type<>(MemoryPalace.id("capture_sealed"));
-		public static final StreamCodec<RegistryFriendlyByteBuf, LegacyCaptureSealed> CODEC = StreamCodec.composite(
-				ByteBufCodecs.stringUtf8(InboxCipher.MAX_SEALED_CHARS), LegacyCaptureSealed::line,
-				ByteBufCodecs.stringUtf8(64), LegacyCaptureSealed::localTime,
-				LegacyCaptureSealed::new);
-
-		@Override
-		public Type<? extends CustomPacketPayload> type() {
-			return TYPE;
-		}
-	}
-
-	/**
-	 * 服务端认不认得这一版的随手记：canSend 是"服务端有没有登记这个标识"（客户端用 ClientPlayNetworking::canSend）。
-	 * 0.3.0 的服务端只登记了旧标识 → false，客户端就别发，留着让玩家升级后找回。
-	 */
-	public static boolean captureSupported(java.util.function.Predicate<CustomPacketPayload.Type<?>> canSend) {
-		return canSend.test(Capture.TYPE) && canSend.test(CaptureSealed.TYPE);
 	}
 
 	/**
@@ -247,8 +202,6 @@ public final class ToolPayloads {
 	public static void register() {
 		PayloadTypeRegistry.serverboundPlay().register(Capture.TYPE, Capture.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(CaptureSealed.TYPE, CaptureSealed.CODEC);
-		PayloadTypeRegistry.serverboundPlay().register(LegacyCapture.TYPE, LegacyCapture.CODEC);
-		PayloadTypeRegistry.serverboundPlay().register(LegacyCaptureSealed.TYPE, LegacyCaptureSealed.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(LookQuery.TYPE, LookQuery.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(Search.TYPE, Search.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(OpenById.TYPE, OpenById.CODEC);
@@ -263,9 +216,6 @@ public final class ToolPayloads {
 		ServerPlayNetworking.registerGlobalReceiver(CaptureSealed.TYPE,
 				(p, ctx) -> capture(ctx.player(), p.requestId(), p.retry(), p.localTime(),
 						(vault, owner, time, retry) -> Inbox.appendSealed(vault, owner, time, p.line(), retry)));
-		// 旧版客户端（0.3.0 及更早）：按旧布局认出来，不保存，提示升级
-		ServerPlayNetworking.registerGlobalReceiver(LegacyCapture.TYPE, (p, ctx) -> rejectLegacy(ctx.player()));
-		ServerPlayNetworking.registerGlobalReceiver(LegacyCaptureSealed.TYPE, (p, ctx) -> rejectLegacy(ctx.player()));
 		// 准星书名、搜索：谁都能用，但只看得到自己读得了的笔记（每一篇单独检查）
 		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
@@ -298,14 +248,6 @@ public final class ToolPayloads {
 		}
 		reply(player, requestId, result.status().name(), result.detail());
 	}
-
-	/** 旧版客户端发来的随手记：不保存。旧客户端没有这条文案，带上中文原文兜底。 */
-	private static void rejectLegacy(ServerPlayer player) {
-		MemoryPalace.LOGGER.warn("{} 的客户端版本过旧（随手记协议不兼容），已拒绝这条随手记", player.getName().getString());
-		player.sendSystemMessage(Component.translatableWithFallback("message.memorypalace.capture_client_outdated", LEGACY_REJECT));
-	}
-
-	static final String LEGACY_REJECT = "随手记未保存：客户端的记忆宫殿版本较旧，与服务端不兼容。请将客户端升级到与服务端相同的版本后重新记录。";
 
 	private static void reply(ServerPlayer player, UUID requestId, String status, String detail) {
 		ServerPlayNetworking.send(player, new CaptureResult(requestId, status, detail));

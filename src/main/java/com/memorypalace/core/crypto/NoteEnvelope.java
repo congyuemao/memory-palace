@@ -191,20 +191,6 @@ public final class NoteEnvelope {
 		}
 	}
 
-	/** 去掉一把锁（没有这把锁就原样返回）。不能去掉最后一把——那样谁都打不开了 → IllegalStateException。 */
-	public static String withoutLock(String envelope, Lock lock) {
-		Parsed parsed = parse(envelope);
-		if (!parsed.wraps().containsKey(lock)) {
-			return envelope.strip();
-		}
-		if (parsed.wraps().size() == 1) {
-			throw new IllegalStateException("不能去掉最后一把锁");
-		}
-		Map<Lock, byte[]> wraps = new LinkedHashMap<>(parsed.wraps());
-		wraps.remove(lock);
-		return serialize(wraps, parsed.payload());
-	}
-
 	// ---- 包装钥匙 ----
 
 	/** 玩家主密钥 → 包 USER 锁用的钥匙（HKDF 域分隔，不直接用主密钥）。调用方用完清零。 */

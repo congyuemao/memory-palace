@@ -218,7 +218,7 @@ public final class KeyRing {
 	}
 
 	/**
-	 * 已有收件箱钥匙就原样返回；没有就生成一对，用 key 锁好私钥，返回新内容（旧钥匙圈第一次解锁后补上）。
+	 * 已有收件箱钥匙就原样返回；没有就生成一对，用 key 锁好私钥，返回新内容（修复缺了收件箱钥匙的钥匙圈，解锁时调用）。
 	 * key 必须是这个钥匙圈解锁出来的主密钥。
 	 */
 	public static String withBox(String content, MasterKey key) {

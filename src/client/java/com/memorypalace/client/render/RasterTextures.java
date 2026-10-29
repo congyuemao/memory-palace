@@ -9,7 +9,6 @@ import net.minecraft.resources.Identifier;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.function.Supplier;
 
 /**
  * 把 Raster（公式、图片）变成游戏贴图并缓存。最多同时保留 MAX 张、合计 MAX_PIXELS 像素，最久没用的会被释放。
@@ -32,19 +31,6 @@ public final class RasterTextures {
 
 	public static Tex get(String key) {
 		return CACHE.get(key);
-	}
-
-	/** 有缓存就直接返回，没有就调用 make 生成；make 返回 null 表示生成失败（失败不缓存）。 */
-	public static Tex getOrCreate(String key, int depth, Supplier<Raster> make) {
-		Tex tex = CACHE.get(key);
-		if (tex != null) {
-			return tex;
-		}
-		Raster raster = make.get();
-		if (raster == null) {
-			return null;
-		}
-		return put(key, raster, depth);
 	}
 
 	/** 单张最多这么多像素（和公式位图上限一样），超过的不建贴图，返回 null：在分配显存之前就挡住。 */

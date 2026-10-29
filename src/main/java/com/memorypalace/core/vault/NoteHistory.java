@@ -227,19 +227,6 @@ public final class NoteHistory {
 		return ok;
 	}
 
-	/** 删掉这篇的全部历史。 */
-	public synchronized void purge(UUID noteId) throws IOException {
-		Path dir = root.resolve(noteId.toString());
-		try (DirectoryStream<Path> files = Files.newDirectoryStream(dir)) {
-			for (Path file : files) {
-				Files.deleteIfExists(file);
-			}
-		} catch (NoSuchFileException e) {
-			return;
-		}
-		Files.deleteIfExists(dir);
-	}
-
 	// ---- 存储 ----
 
 	/** 硬盘上的版本，最新的在前。同一个 ID 既有全文又有差异（改存差异时中断）时用全文。 */

@@ -258,17 +258,6 @@ class NoteHistoryTest {
 	}
 
 	@Test
-	void purgeRemovesEverythingForThatNoteOnly() throws Exception {
-		NoteHistory history = history();
-		history.record(NOTE, "a", "b", false);
-		history.record(OTHER, "c", "d", false);
-		history.purge(NOTE);
-		history.purge(NOTE); // 没有也不报错
-		assertTrue(history.list(NOTE).isEmpty());
-		assertEquals(1, history.list(OTHER).size());
-	}
-
-	@Test
 	void vaultWriteBodyRecordsTheOldBodyOnlyWhenTheFileReallyChanges() throws Exception {
 		Vault v = new Vault(vault);
 		NoteHistory history = history();

@@ -69,7 +69,7 @@ public final class ClientKeys {
 
 	/**
 	 * 用 keyring 解锁出了 newKey（输密码、设新密码、恢复）：设好主密钥，顺便解出收件箱私钥备用。
-	 * 旧钥匙圈还没有收件箱钥匙的：生成一对补进去并写回服务端，存好之后才开始用。
+	 * 修复：钥匙圈缺了收件箱钥匙（旧版本建的，或者被手动改过）就生成一对补进去并写回服务端，存好之后才开始用。
 	 */
 	public static void unlockedWith(String keyring, MasterKey newKey) {
 		setKey(newKey);

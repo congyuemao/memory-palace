@@ -4,7 +4,6 @@ import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteSummary;
 import me.lucko.fabric.api.permissions.v0.Permissions;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.PermissionLevel;
@@ -85,14 +84,5 @@ public final class PalaceAccess {
 	 */
 	public static boolean titleIsPublic(NoteSummary note) {
 		return PalaceServer.othersCanJoin() ? note.titleIsPublic(PalaceServer.visibility()) : !note.ownerOnly();
-	}
-
-	/** 管理员才能做的事，不是管理员时顺便告诉原因。 */
-	public static boolean checkAdmin(ServerPlayer player) {
-		if (admin(player)) {
-			return true;
-		}
-		player.sendSystemMessage(Component.translatable("message.memorypalace.admin_only"));
-		return false;
 	}
 }
