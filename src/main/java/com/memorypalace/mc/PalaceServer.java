@@ -184,7 +184,11 @@ public final class PalaceServer {
 		Thread.ofVirtual().name("memorypalace-backup").start(() -> {
 			try {
 				VaultBackup.backup(vaultRoot, backupDir, KEEP_BACKUPS, Clock.systemDefaultZone())
-						.ifPresent(zip -> MemoryPalace.LOGGER.info("笔记库已备份：{}", zip));
+						.ifPresentOrElse(
+								zip -> MemoryPalace.LOGGER.info("笔记库完整备份已保存：{}", zip),
+								() -> MemoryPalace.LOGGER.debug("笔记库内容未变化或首次备份时为空，未生成新备份"));
+			} catch (VaultBackup.IncompleteBackupException e) {
+				MemoryPalace.LOGGER.error("笔记库未能完整读取，本次备份已放弃，已有备份未清理", e);
 			} catch (IOException | RuntimeException e) {
 				MemoryPalace.LOGGER.error("笔记库备份失败", e);
 			}

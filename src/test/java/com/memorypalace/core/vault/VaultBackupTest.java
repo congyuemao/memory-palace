@@ -2,23 +2,35 @@ package com.memorypalace.core.vault;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 import java.util.zip.ZipFile;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.*;
 
 class VaultBackupTest {
 	@TempDir
@@ -194,5 +206,188 @@ class VaultBackupTest {
 
 		assertTrue(Files.exists(newest), "最新的备份必须留下");
 		assertEquals(List.of("2026-10-27T03-05-05Z.zip", "2026-10-27T03-06-05Z.zip"), backupNames());
+	}
+
+	@FunctionalInterface
+	private interface IoAction {
+		void run() throws IOException;
+	}
+
+	/**
+	 * 使用真实权限拒绝；root 或既不支持 POSIX 权限、也不支持 ACL 的平台必须明确跳过，不能假通过。
+	 * Windows（NTFS）没有 POSIX 权限：在最前面加一条"拒绝当前用户读数据"的 ACL（对目录就是不让列目录），测完恢复原样。
+	 */
+	private void withReadDenied(Path source, IoAction action) throws IOException {
+		if (!Files.getFileStore(source).supportsFileAttributeView("posix")) {
+			withAclReadDenied(source, action);
+			return;
+		}
+		Set<PosixFilePermission> original = Files.getPosixFilePermissions(source);
+		try {
+			Files.setPosixFilePermissions(source, Set.of());
+			assumeFalse(Files.isReadable(source), "请用非特权进程运行：当前进程可绕过读取权限");
+			action.run();
+		} finally {
+			Files.setPosixFilePermissions(source, original);
+		}
+	}
+
+	private void withAclReadDenied(Path source, IoAction action) throws IOException {
+		AclFileAttributeView view = Files.getFileAttributeView(source, AclFileAttributeView.class);
+		assumeTrue(view != null, "需要 POSIX 文件权限或 ACL");
+		List<AclEntry> original = view.getAcl();
+		AclEntry deny = AclEntry.newBuilder()
+				.setType(AclEntryType.DENY)
+				.setPrincipal(view.getOwner())
+				.setPermissions(AclEntryPermission.READ_DATA)
+				.build();
+		List<AclEntry> denied = new ArrayList<>();
+		denied.add(deny);
+		denied.addAll(original);
+		try {
+			view.setAcl(denied);
+			assumeFalse(Files.isReadable(source) && canActuallyRead(source), "请用非特权进程运行：当前进程可绕过读取权限");
+			action.run();
+		} finally {
+			view.setAcl(original);
+		}
+	}
+
+	/** Files.isReadable 在 Windows 上只看大概；真去打开一次才算数。 */
+	private static boolean canActuallyRead(Path source) {
+		try {
+			if (Files.isDirectory(source)) {
+				try (Stream<Path> s = Files.list(source)) {
+					s.findAny();
+				}
+			} else {
+				Files.readAllBytes(source);
+			}
+			return true;
+		} catch (IOException e) {
+			return false;
+		}
+	}
+
+	private void assertSourceFailure(Path source, Instant time) {
+		IOException failure = assertThrows(IOException.class,
+				() -> VaultBackup.backup(vault(), backups(), 10, at(time)), "不能将漏读报告为成功或未变化");
+		assertInstanceOf(AccessDeniedException.class, failure.getCause());
+		assertTrue(failure.getMessage().contains(source.toString()), "失败信息应指出无法读取的路径");
+	}
+
+	@Test
+	void unreadableFileAbortsInsteadOfPublishingPartialZip() throws IOException {
+		write("a.md", "虚构笔记 A", OLD);
+		Path lock = write(".palace-lock", "虚构锁文件", OLD);
+		Path first = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		byte[] original = Files.readAllBytes(first);
+		write("a.md", "虚构笔记 B", OLD);
+
+		withReadDenied(lock, () -> {
+			assertSourceFailure(lock, T0.plusSeconds(60));
+			assertEquals(List.of(first.getFileName().toString()), backupNames(), "不能留下残缺 ZIP 或临时文件");
+			assertArrayEquals(original, Files.readAllBytes(first));
+		});
+
+		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).orElseThrow();
+		assertEquals(List.of(".palace-lock", "a.md"), zipEntries(recovered));
+		assertEquals("虚构锁文件", zipText(recovered, ".palace-lock"));
+		assertEquals("虚构笔记 B", zipText(recovered, "a.md"));
+		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(180))).isEmpty());
+	}
+
+	@Test
+	void unreadableOnlyFileIsFailureNotEmptyVault() throws IOException {
+		Path lock = write(".palace-lock", "虚构锁文件", OLD);
+		withReadDenied(lock, () -> {
+			assertSourceFailure(lock, T0);
+			assertEquals(List.of(), backupNames());
+		});
+		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of(".palace-lock"), zipEntries(recovered));
+		assertEquals("虚构锁文件", zipText(recovered, ".palace-lock"));
+	}
+
+	@Test
+	void unreadableSubdirectoryIsFailureEvenWhenNoFilesWereCollected() throws IOException {
+		write("隐藏/.palace-lock", "虚构锁文件", OLD);
+		Path hidden = vault().resolve("隐藏");
+		withReadDenied(hidden, () -> {
+			assertSourceFailure(hidden, T0);
+			assertEquals(List.of(), backupNames());
+		});
+		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of("隐藏/.palace-lock"), zipEntries(recovered));
+		assertEquals("虚构锁文件", zipText(recovered, "隐藏/.palace-lock"));
+	}
+
+	@Test
+	void unreadableNewSubdirectoryIsNotMistakenForUnchangedContents() throws IOException {
+		write("a.md", "虚构笔记", OLD);
+		Path first = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		write("隐藏/.palace-lock", "虚构锁文件", OLD);
+		Path hidden = vault().resolve("隐藏");
+		withReadDenied(hidden, () -> {
+			assertSourceFailure(hidden, T0.plusSeconds(60));
+			assertEquals(List.of(first.getFileName().toString()), backupNames());
+		});
+		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).orElseThrow();
+		assertEquals(List.of("a.md", "隐藏/.palace-lock"), zipEntries(recovered));
+	}
+
+	@ParameterizedTest(name = "保留 10 份：原有 {0} 份，目录读取失败 = {1}")
+	@CsvSource({"1, false", "10, false", "1, true", "10, true"})
+	void tenFailedAttemptsNeverEvictCompleteBackups(int initialCount, boolean denyDirectory) throws IOException {
+		Path lock = write("保护/.palace-lock", "虚构锁文件", OLD);
+		Map<Path, byte[]> originals = new LinkedHashMap<>();
+		for (int i = 0; i < initialCount; i++) {
+			write("a.md", "完整版本 " + i, OLD);
+			Path zip = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(i))).orElseThrow();
+			assertEquals(List.of("a.md", "保护/.palace-lock"), zipEntries(zip));
+			assertEquals("虚构锁文件", zipText(zip, "保护/.palace-lock"));
+			originals.put(zip, Files.readAllBytes(zip));
+		}
+		List<String> names = backupNames();
+		Path denied = denyDirectory ? lock.getParent() : lock;
+		withReadDenied(denied, () -> {
+			for (int i = 0; i < 10; i++) {
+				write("a.md", "读取失败期间版本 " + i, OLD);
+				assertSourceFailure(denied, T0.plusSeconds(60 + i));
+				assertEquals(names, backupNames(), "第 " + i + " 次失败不能发布 ZIP、留下临时文件或淘汰完整副本");
+				for (var entry : originals.entrySet()) {
+					assertArrayEquals(entry.getValue(), Files.readAllBytes(entry.getKey()));
+					assertEquals(List.of("a.md", "保护/.palace-lock"), zipEntries(entry.getKey()));
+				}
+			}
+		});
+		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).orElseThrow();
+		assertEquals(List.of("a.md", "保护/.palace-lock"), zipEntries(recovered));
+		assertEquals("读取失败期间版本 9", zipText(recovered, "a.md"));
+		assertEquals("虚构锁文件", zipText(recovered, "保护/.palace-lock"));
+		assertEquals(Math.min(10, initialCount + 1), backupNames().size(), "仅恢复后成功备份才能触发保留策略");
+		assertTrue(Files.exists(recovered));
+		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(180))).isEmpty());
+	}
+
+	@Test
+	void unreadableRootIsFailureNotEmptyVault() throws IOException {
+		write("a.md", "虚构笔记", OLD);
+		withReadDenied(vault(), () -> {
+			assertSourceFailure(vault(), T0);
+			assertEquals(List.of(), backupNames());
+		});
+	}
+
+	@Test
+	void backsUpDeletionOfLastFileAndDeduplicatesEmptySnapshot() throws IOException {
+		Path note = write("a.md", "虚构笔记", OLD);
+		Path first = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		Files.delete(note);
+		Path empty = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(List.of(), zipEntries(empty));
+		assertEquals(List.of("a.md"), zipEntries(first));
+		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).isEmpty());
+		assertEquals(List.of(first.getFileName().toString(), empty.getFileName().toString()), backupNames());
 	}
 }

@@ -40,6 +40,13 @@ public final class VaultBackup {
 
 	private VaultBackup() {}
 
+	/** 源文件或目录无法完整读取；本次备份已放弃，不会清理已有备份。 */
+	public static final class IncompleteBackupException extends IOException {
+		private IncompleteBackupException(Path source, IOException cause) {
+			super("无法完整读取笔记库：" + source, cause);
+		}
+	}
+
 	/**
 	 * 备份 vaultRoot 整个文件夹到 backupDir/&lt;时间&gt;.zip。要求：
 	 * - 文件名格式 "yyyy-MM-dd'T'HH-mm-ss'Z'.zip"，时间取自 clock、一律用 UTC；同一秒内已存在同名文件时加 "_2"、"_3"…
@@ -49,11 +56,12 @@ public final class VaultBackup {
 	 * - backupDir 不存在时自动创建
 	 * - 如果打包结果与最新一个已有备份的内容完全相同（文件路径集合和每个文件的字节都一样），则不备份，返回 empty。
 	 *   只按内容判断、不看修改时间：迁入带旧修改时间的笔记、改名、删除、改完还原修改时间都必须能备份上
-	 * - 笔记库为空（没有任何文件）时不备份，返回 empty
+	 * - 首次备份时笔记库为空（没有任何文件），返回 empty；已有备份后合法删除所有文件则保存空 ZIP
 	 * - 备份完成后清理：backupDir 里符合上面文件名格式的 .zip 只保留最新的 keep 个（按文件名表示的时刻排序，旧的删掉）；
 	 *   不符合格式的文件一律不动
-	 * - 单个文件读取失败：跳过它继续（不要让一个被占用的文件毁掉整个备份）
-	 * @return 新建的备份文件；没有备份时为 empty
+	 * - 任何源文件读取或目录遍历失败：放弃本次备份、删除临时 ZIP，不发布残缺备份、不清理已有副本
+	 * @return 新建的完整备份文件；内容未变化或首次备份时笔记库为空则为 empty（失败绝不返回 empty）
+	 * @throws IncompleteBackupException 源文件或目录无法完整读取
 	 */
 	public static synchronized Optional<Path> backup(Path vaultRoot, Path backupDir, int keep, Clock clock) throws IOException {
 		if (keep < 1) {
@@ -74,13 +82,18 @@ public final class VaultBackup {
 
 			@Override
 			public FileVisitResult visitFileFailed(Path file, IOException error) throws IOException {
-				if (file.equals(vaultRoot)) {
-					throw error;
+				throw new IncompleteBackupException(file, error);
+			}
+
+			@Override
+			public FileVisitResult postVisitDirectory(Path directory, IOException error) throws IOException {
+				if (error != null) {
+					throw new IncompleteBackupException(directory, error);
 				}
 				return FileVisitResult.CONTINUE;
 			}
 		});
-		if (files.isEmpty()) {
+		if (files.isEmpty() && backups.isEmpty()) {
 			return Optional.empty();
 		}
 		String timestamp = TIMESTAMP.format(clock.instant().atZone(java.time.ZoneOffset.UTC));
@@ -90,24 +103,19 @@ public final class VaultBackup {
 		}
 		Path temporary = Files.createTempFile(backupDir, ".palace-", ".tmp");
 		try {
-			int count = 0;
 			try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(temporary))) {
 				for (Path file : files) {
 					byte[] content;
 					try {
 						content = Files.readAllBytes(file);
 					} catch (IOException e) {
-						continue;
+						throw new IncompleteBackupException(file, e);
 					}
 					// 读取完整后再加入 ZIP，避免读取失败留下半个条目。
 					zip.putNextEntry(new ZipEntry(vaultRoot.relativize(file).toString().replace('\\', '/')));
 					zip.write(content);
 					zip.closeEntry();
-					count++;
 				}
-			}
-			if (count == 0) {
-				return Optional.empty();
 			}
 			// 是否变化只看内容：修改时间可能在未来，也可能比上次备份还旧（迁入、改名、删除、还原时间）。
 			if (!backups.isEmpty() && sameContents(temporary, backups.getLast())) {
