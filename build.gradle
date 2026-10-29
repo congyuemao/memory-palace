@@ -87,3 +87,30 @@ java {
 	sourceCompatibility = JavaVersion.VERSION_25
 	targetCompatibility = JavaVersion.VERSION_25
 }
+
+// 笔记解密小工具：不开游戏，用密码或恢复密钥把加密笔记解成明文另存一份。
+// 单独一个可以双击运行的 jar（build/libs/memory-palace-decrypt-<版本>.jar），只带 core/ 和密码库，不需要 Minecraft
+configurations {
+	decryptToolLibs
+}
+
+dependencies {
+	decryptToolLibs "com.password4j:password4j:${project.password4j_version}"
+}
+
+tasks.register("decryptTool", Jar) {
+	group = "build"
+	archiveBaseName = "memory-palace-decrypt"
+	manifest {
+		attributes "Main-Class": "com.memorypalace.tool.DecryptTool"
+	}
+	from(sourceSets.main.output) {
+		include "com/memorypalace/core/**", "com/memorypalace/tool/**"
+	}
+	from({ configurations.decryptToolLibs.collect { zipTree(it) } }) {
+		exclude "META-INF/MANIFEST.MF", "META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class", "META-INF/versions/**/module-info.class"
+	}
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+assemble.dependsOn "decryptTool"
