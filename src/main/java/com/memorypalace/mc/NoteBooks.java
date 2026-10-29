@@ -39,19 +39,20 @@ public final class NoteBooks {
 
 	/**
 	 * 书名。原版成书的书名、书页、作者谁拿着书都看得到（多人游戏里别人看不到服务器硬盘，路径也算秘密），所以：
-	 * - 世界里人人能读的笔记：标题（加密笔记的标题就是文件名，正文标题在密文里），书页写文件路径，作者写笔记的主人
-	 * - 其余不是人人能读的（收件箱、只给部分人看的、"默认私有"世界里的）："【加密笔记】#7f3a" / "【私密笔记】#7f3a"。
+	 * - 世界里人人能读的笔记：标题，书页写文件路径，作者写笔记的主人
+	 * - 加密笔记：一律同上。标题就是文件名（正文标题在密文里），文件名本来就不加密；捡到书的人知道名字也打不开
+	 * - 其余不是人人能读的明文笔记（收件箱、只给部分人看的、"默认私有"世界里的）："【私密笔记】#7f3a"。
 	 *   不写标题也不写路径，只带 ID 的前 4 位，方便分清是哪几本；读得了的人对准书架时能看到真正的标题
 	 * 原版书名最长 32 字，超出用"…"截断。
 	 */
 	static String titleFor(NoteSummary note) {
 		String tag = " #" + note.id().toString().substring(0, 4);
-		String title = isPublic(note) ? note.title() : (note.encrypted() ? "【加密笔记】" : "【私密笔记】") + tag;
+		String title = isPublic(note) ? note.title() : "【私密笔记】" + tag;
 		return title.length() > MAX_TITLE ? title.substring(0, MAX_TITLE - 1) + "…" : title;
 	}
 
 	private static boolean isPublic(NoteSummary note) {
-		return PalaceAccess.titleIsPublic(note);
+		return note.encrypted() || PalaceAccess.titleIsPublic(note);
 	}
 
 	/** 书的作者：笔记的主人（没写主人的归房主，专用服务器上归管理员）。不公开的笔记不写是谁的。 */
