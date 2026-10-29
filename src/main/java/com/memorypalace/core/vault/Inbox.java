@@ -69,6 +69,14 @@ public final class Inbox {
 	 * 不往里写：否则这个人记下的想法会落进别人能读的笔记里。
 	 */
 	public static NoteSummary append(Vault vault, UUID owner, OffsetDateTime now, String text) throws IOException {
+		return append(vault, owner, now, text, false);
+	}
+
+	/**
+	 * 同上。retry = 客户端重发的同一条（上次没收到保存结果）：当天的收件箱里已经有完全一样的这一行
+	 * （同一时刻、同样内容，标不标时区都算）就不再追加，直接返回这篇。
+	 */
+	public static NoteSummary append(Vault vault, UUID owner, OffsetDateTime now, String text, boolean retry) throws IOException {
 		String content = text == null ? "" : text.replace('\r', ' ').replace('\n', ' ').strip();
 		if (content.isEmpty()) {
 			throw new IllegalArgumentException("收集内容不能为空");
@@ -77,7 +85,8 @@ public final class Inbox {
 		String tagged = "- " + time + " (" + label(now.getOffset()) + ") " + content + "\n";
 		String plain = "- " + time + " " + content + "\n";
 		// 新文件的第一条一定标注时区；之后和最近一条带标注的记录同一个时区就不标，换了时区（或一条标注都没有）才标
-		return appendLine(vault, owner, now, tagged, body -> now.getOffset().equals(lastOffset(body)) ? plain : tagged);
+		return appendLine(vault, owner, now, tagged, body -> now.getOffset().equals(lastOffset(body)) ? plain : tagged,
+				retry ? java.util.List.of(tagged.strip(), plain.strip()) : java.util.List.of());
 	}
 
 	/**
@@ -85,11 +94,17 @@ public final class Inbox {
 	 * 服务端看不到内容，原样追加成一行。不是合法的密文行 → IllegalArgumentException。其余规则同 append。
 	 */
 	public static NoteSummary appendSealed(Vault vault, UUID owner, OffsetDateTime now, String sealedLine) throws IOException {
+		return appendSealed(vault, owner, now, sealedLine, false);
+	}
+
+	/** 同上。retry 同 append：重发的密文行逐字节相同，收件箱里已经有这一行就不再追加。 */
+	public static NoteSummary appendSealed(Vault vault, UUID owner, OffsetDateTime now, String sealedLine, boolean retry)
+			throws IOException {
 		if (!InboxCipher.isSealed(sealedLine)) {
 			throw new IllegalArgumentException("不是收件箱密文");
 		}
 		String line = sealedLine.strip() + "\n";
-		return appendLine(vault, owner, now, line, body -> line);
+		return appendLine(vault, owner, now, line, body -> line, retry ? java.util.List.of(line.strip()) : java.util.List.of());
 	}
 
 	/**
@@ -109,7 +124,7 @@ public final class Inbox {
 	public static final int MAX_PARTS = 10;
 
 	private static NoteSummary appendLine(Vault vault, UUID owner, OffsetDateTime now, String firstLine,
-			java.util.function.UnaryOperator<String> lineAfter) throws IOException {
+			java.util.function.UnaryOperator<String> lineAfter, java.util.List<String> alreadyThere) throws IOException {
 		String date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
 		synchronized (vault) {
 			// 同步外部编辑的路径和加密标记
@@ -132,6 +147,9 @@ public final class Inbox {
 							.orElseThrow(() -> new IOException("无法读取收件箱笔记"));
 					if (body == null || NoteCipher.isEncrypted(body) || NoteEnvelope.isEnvelope(body)) {
 						break; // 这一篇已经是加密笔记，记到下一篇
+					}
+					if (!alreadyThere.isEmpty() && body.lines().map(String::strip).anyMatch(alreadyThere::contains)) {
+						return note; // 重发的这一条上次其实已经记上了
 					}
 					if (body.length() >= MAX_CHARS) {
 						throw new FullException();

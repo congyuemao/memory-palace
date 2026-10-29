@@ -3,6 +3,7 @@ package com.memorypalace.mc;
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.search.NoteSearch;
+import com.memorypalace.core.vault.CaptureService;
 import com.memorypalace.core.vault.Inbox;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLocations;
@@ -52,10 +53,13 @@ public final class ToolPayloads {
 	/**
 	 * 客户端 → 服务端：记进今天的收件箱。localTime 是玩家电脑上的本地时间（ISO 格式、带时区偏移），
 	 * "今天"按玩家所在地算，而不是服务器所在地。
+	 * requestId 是客户端给这条随手记起的编号，服务端用 CaptureResult 回同一个编号；retry = 同一条的重发（见 CaptureService）。
 	 */
-	public record Capture(String text, String localTime) implements CustomPacketPayload {
+	public record Capture(UUID requestId, boolean retry, String text, String localTime) implements CustomPacketPayload {
 		public static final Type<Capture> TYPE = new Type<>(MemoryPalace.id("capture"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, Capture> CODEC = StreamCodec.composite(
+				UUIDUtil.STREAM_CODEC, Capture::requestId,
+				ByteBufCodecs.BOOL, Capture::retry,
 				ByteBufCodecs.stringUtf8(MAX_CAPTURE), Capture::text,
 				ByteBufCodecs.stringUtf8(64), Capture::localTime,
 				Capture::new);
@@ -68,14 +72,34 @@ public final class ToolPayloads {
 
 	/**
 	 * 客户端 → 服务端：记进今天的收件箱，但内容已经在客户端用收件箱公钥加密好了（InboxCipher.seal，一行 "MPALBOX1:…"）。
-	 * 服务端只看得到"哪天记了一条、大概多长"，看不到内容。localTime 同 Capture，只用来决定记进哪一天。
+	 * 服务端只看得到"哪天记了一条、大概多长"，看不到内容。localTime、requestId、retry 同 Capture。
 	 */
-	public record CaptureSealed(String line, String localTime) implements CustomPacketPayload {
+	public record CaptureSealed(UUID requestId, boolean retry, String line, String localTime) implements CustomPacketPayload {
 		public static final Type<CaptureSealed> TYPE = new Type<>(MemoryPalace.id("capture_sealed"));
 		public static final StreamCodec<RegistryFriendlyByteBuf, CaptureSealed> CODEC = StreamCodec.composite(
+				UUIDUtil.STREAM_CODEC, CaptureSealed::requestId,
+				ByteBufCodecs.BOOL, CaptureSealed::retry,
 				ByteBufCodecs.stringUtf8(InboxCipher.MAX_SEALED_CHARS), CaptureSealed::line,
 				ByteBufCodecs.stringUtf8(64), CaptureSealed::localTime,
 				CaptureSealed::new);
+
+		@Override
+		public Type<? extends CustomPacketPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * 服务端 → 客户端：requestId 这条随手记的保存结果。status 是 CaptureService.Status 的名字；
+	 * OK 时 detail 是收件箱路径，QUOTA 时是篇数上限。每条随手记都会收到一个（没权限、限速、写入失败都算）。
+	 */
+	public record CaptureResult(UUID requestId, String status, String detail) implements CustomPacketPayload {
+		public static final Type<CaptureResult> TYPE = new Type<>(MemoryPalace.id("capture_result"));
+		public static final StreamCodec<RegistryFriendlyByteBuf, CaptureResult> CODEC = StreamCodec.composite(
+				UUIDUtil.STREAM_CODEC, CaptureResult::requestId,
+				ByteBufCodecs.stringUtf8(32), CaptureResult::status,
+				ByteBufCodecs.stringUtf8(512), CaptureResult::detail,
+				CaptureResult::new);
 
 		@Override
 		public Type<? extends CustomPacketPayload> type() {
@@ -182,72 +206,52 @@ public final class ToolPayloads {
 		PayloadTypeRegistry.serverboundPlay().register(LookQuery.TYPE, LookQuery.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(Search.TYPE, Search.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(OpenById.TYPE, OpenById.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(CaptureResult.TYPE, CaptureResult.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(LookInfo.TYPE, LookInfo.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(Results.TYPE, Results.CODEC);
 
 		// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/
 		ServerPlayNetworking.registerGlobalReceiver(Capture.TYPE,
-				(p, ctx) -> capture(ctx.player(), p.localTime(), (vault, owner, time) -> Inbox.append(vault, owner, time, p.text())));
+				(p, ctx) -> capture(ctx.player(), p.requestId(), p.retry(), p.localTime(),
+						(vault, owner, time, retry) -> Inbox.append(vault, owner, time, p.text(), retry)));
 		ServerPlayNetworking.registerGlobalReceiver(CaptureSealed.TYPE,
-				(p, ctx) -> capture(ctx.player(), p.localTime(), (vault, owner, time) -> Inbox.appendSealed(vault, owner, time, p.line())));
+				(p, ctx) -> capture(ctx.player(), p.requestId(), p.retry(), p.localTime(),
+						(vault, owner, time, retry) -> Inbox.appendSealed(vault, owner, time, p.line(), retry)));
 		// 准星书名、搜索：谁都能用，但只看得到自己读得了的笔记（每一篇单独检查）
 		ServerPlayNetworking.registerGlobalReceiver(LookQuery.TYPE, (p, ctx) -> look(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(Search.TYPE, (p, ctx) -> search(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(OpenById.TYPE, (p, ctx) -> PalaceInteractions.openNote(ctx.player(), p.id()));
 	}
 
-	// 两次快速收集至少间隔这么久：人手按 K → 打字 → 回车远不会这么快，只挡住刷包
-	private static final long CAPTURE_INTERVAL_MS = 200;
-	private static final Map<UUID, Long> LAST_CAPTURE = new ConcurrentHashMap<>();
+	private static final CaptureService CAPTURES = new CaptureService();
 
-	/** 往收件箱里写一条：明文（Inbox.append）或客户端加密好的（Inbox.appendSealed）。 */
-	@FunctionalInterface
-	private interface InboxWrite {
-		NoteSummary write(Vault vault, UUID owner, OffsetDateTime time) throws IOException;
-	}
-
-	// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/
-	private static void capture(ServerPlayer player, String localTime, InboxWrite write) {
+	// 每人一个收件箱：房主的在根目录 收件箱/，其他玩家的在自己的个人区 players/<UUID>/收件箱/。
+	// 不管成功失败都回一个 CaptureResult，客户端据此决定这条随手记是保存了，还是要留着让玩家找回重试
+	private static void capture(ServerPlayer player, UUID requestId, boolean retry, String localTime, CaptureService.Write write) {
 		if (!PalaceAccess.allowed(player, PalaceAccess.CREATE)) {
-			player.sendSystemMessage(Component.translatable(PalaceAccess.enabled(player)
-					? "message.memorypalace.admin_only" : "message.memorypalace.multiplayer_off"));
+			reply(player, requestId, PalaceAccess.enabled(player) ? "ADMIN_ONLY" : "MULTIPLAYER_OFF", "");
 			return;
 		}
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
-			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
-			return;
-		}
-		long now = System.currentTimeMillis();
-		Long last = LAST_CAPTURE.put(player.getUUID(), now);
-		if (last != null && now - last < CAPTURE_INTERVAL_MS) {
+			reply(player, requestId, "NO_VAULT", "");
 			return;
 		}
 		UUID owner = PalaceAccess.isHost(player) ? null : player.getUUID();
-		OffsetDateTime time = playerTime(localTime);
-		// 当天的收件箱还没建：新建一篇算进普通玩家的篇数上限
-		int maxNotes = PalaceConfig.get().maxNotesPerPlayer();
-		if (owner != null && maxNotes > 0 && !PalaceAccess.admin(player) && vault.resolve(Inbox.pathFor(owner, time)).isEmpty()
-				&& vault.list().stream().filter(n -> owner.equals(n.access().owner())).count() >= maxNotes) {
-			player.sendSystemMessage(Component.translatable("command.memorypalace.quota_notes", maxNotes));
-			return;
+		int maxNotes = owner == null || PalaceAccess.admin(player) ? 0 : PalaceConfig.get().maxNotesPerPlayer();
+		CaptureService.Result result = CAPTURES.capture(vault, player.getUUID(), owner, requestId, retry,
+				playerTime(localTime), maxNotes, System.nanoTime() / 1_000_000, write);
+		switch (result.status()) {
+			case NOT_YOURS -> MemoryPalace.LOGGER.warn("{} 的收件箱文件作者不是本人，拒绝写入", player.getName().getString());
+			case FAILED -> MemoryPalace.LOGGER.error("写入收件箱失败", result.error());
+			default -> {
+			}
 		}
-		try {
-			NoteSummary inbox = write.write(vault, owner, time);
-			player.sendSystemMessage(Component.translatable("message.memorypalace.captured", inbox.relativePath()));
-		} catch (IllegalArgumentException e) {
-			// 空内容、不是合法的收件箱密文：什么都不做
-		} catch (Inbox.NotYoursException e) {
-			MemoryPalace.LOGGER.warn("{} 的收件箱文件作者不是本人，拒绝写入", player.getName().getString());
-			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_not_yours"));
-		} catch (IllegalStateException e) {
-			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_encrypted"));
-		} catch (Inbox.FullException e) {
-			player.sendSystemMessage(Component.translatable("message.memorypalace.inbox_full"));
-		} catch (IOException e) {
-			MemoryPalace.LOGGER.error("写入收件箱失败", e);
-			player.sendSystemMessage(Component.translatable("message.memorypalace.capture_failed"));
-		}
+		reply(player, requestId, result.status().name(), result.detail());
+	}
+
+	private static void reply(ServerPlayer player, UUID requestId, String status, String detail) {
+		ServerPlayNetworking.send(player, new CaptureResult(requestId, status, detail));
 	}
 
 	/**

@@ -488,6 +488,42 @@ class InboxTest {
 				Arguments.of(null, true), Arguments.of(ALICE, true));
 	}
 
+	@Test
+	void retryRecognisesTaggedAndUntaggedLinesButOnlyExactOnes() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		Inbox.append(vault, ALICE, T, "第一条");
+		NoteSummary note = Inbox.append(vault, ALICE, T, "第二条"); // 同一时区：不标注
+		String body = vault.readBody(note.id()).orElseThrow();
+		assertEquals("# 收件箱 2026-10-27\n\n- 14:32 (UTC+11) 第一条\n- 14:32 第二条\n", body);
+
+		Inbox.append(vault, ALICE, T, "第一条", true);
+		Inbox.append(vault, ALICE, T, "第二条\n", true); // 换行会被换成空格再去掉首尾空白：还是同一行
+		assertEquals(body, vault.readBody(note.id()).orElseThrow(), "重发的两条都已经在了");
+
+		Inbox.append(vault, ALICE, T.plusMinutes(1), "第二条", true); // 不同时刻：不是同一条
+		Inbox.append(vault, ALICE, T, "第二", true); // 只是前缀：不是同一条
+		assertEquals(body + "- 14:33 第二条\n- 14:32 第二\n", vault.readBody(note.id()).orElseThrow());
+	}
+
+	@Test
+	void sealedRetryFindsTheLineInTheContinuationPart() throws IOException {
+		var vault = new Vault(dir);
+		vault.scan();
+		var key = KeyRing.create("password1".toCharArray(), false).key();
+		try {
+			NoteSummary first = Inbox.append(vault, ALICE, T, "x");
+			vault.writeBody(first.id(), NoteCipher.encrypt(key, first.id(), "x"), null);
+			String sealed = sealedLine("续篇里的一条");
+			NoteSummary part2 = Inbox.appendSealed(vault, ALICE, T, sealed);
+			String body = vault.readBody(part2.id()).orElseThrow();
+			assertEquals(part2.id(), Inbox.appendSealed(vault, ALICE, T, sealed, true).id());
+			assertEquals(body, vault.readBody(part2.id()).orElseThrow());
+		} finally {
+			key.destroy();
+		}
+	}
+
 	private static String sealedLine(String plaintext) {
 		var keys = InboxCipher.generate();
 		try {

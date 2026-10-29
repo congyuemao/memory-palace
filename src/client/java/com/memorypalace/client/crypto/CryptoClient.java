@@ -136,7 +136,7 @@ public final class CryptoClient {
 			decryptIntent = null;
 			FolderBatch.reset();
 			WAITING_FOR_VAULT.clear();
-			InboxCapture.reset();
+			InboxCapture.disconnect();
 			ClientKeys.disconnect();
 			ReadPasswords.disconnect();
 		}));

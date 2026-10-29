@@ -2,10 +2,12 @@ package com.memorypalace.client;
 
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.CryptoClient;
+import com.memorypalace.client.crypto.InboxCapture;
 import com.memorypalace.client.crypto.NoteSaver;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.core.render.MathRenderer;
 import com.memorypalace.mc.EditPayloads;
+import com.memorypalace.mc.ToolPayloads;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -27,7 +29,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 				client.gui.setScreen(new NoteScreen());
 			}
 			while (PalaceKeys.capture.consumeClick()) {
-				client.gui.setScreen(new QuickCaptureScreen());
+				client.gui.setScreen(InboxCapture.screen()); // 有没保存成功的随手记就先找回它
 			}
 			while (PalaceKeys.search.consumeClick()) {
 				client.gui.setScreen(new SearchScreen());
@@ -38,6 +40,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 			LookHud.tick(client);
 			Navigator.tick(client);
 			ClientKeys.tick();
+			InboxCapture.tick();
 		});
 
 		NoteImageStore.register();
@@ -50,6 +53,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 		// 保存结果交给发起保存的那一方；/palace new 之后直接打开编辑器
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.SaveResult.TYPE, (payload, context) -> NoteSaver.onResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) -> CryptoClient.openEditor(payload));
+		ClientPlayNetworking.registerGlobalReceiver(ToolPayloads.CaptureResult.TYPE, (payload, context) -> InboxCapture.onResult(payload));
 
 		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
 		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));
@@ -60,6 +64,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 					if (client.player != null) {
 						client.player.sendSystemMessage(Component.translatable("message.memorypalace.started"));
 						PalaceKeys.warnConflicts();
+						InboxCapture.remind();
 					}
 				}));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(Navigator::stop));

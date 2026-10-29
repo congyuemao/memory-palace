@@ -34,7 +34,7 @@ public final class ClientKeys {
 	private static MasterKey key;
 	private static long lastUse;
 	private static int generation;
-	private static final List<Consumer<String>> WAITING = new ArrayList<>();
+	private static final List<Waiter> WAITING = new ArrayList<>();
 	private static int writeCounter;
 	private static final Map<Integer, Consumer<Boolean>> WRITES = new HashMap<>();
 
@@ -238,22 +238,32 @@ public final class ClientKeys {
 	 * 读取失败或没有权限时不回调，直接提示——绝不能把"读不出来"当成"还没启用"，否则会覆盖掉原来的钥匙圈。
 	 */
 	public static void withKeyring(Consumer<String> callback) {
-		WAITING.add(callback);
+		withKeyring(callback, () -> {});
+	}
+
+	/** 同上；读取失败或没有权限时（提示之后）调用 failed。离开世界时丢掉的请求两个都不调用。 */
+	public static void withKeyring(Consumer<String> callback, Runnable failed) {
+		WAITING.add(new Waiter(callback, failed));
 		if (WAITING.size() == 1) {
 			ClientPlayNetworking.send(CryptoPayloads.KeyringRequest.INSTANCE);
 		}
 	}
 
 	public static void onKeyringData(CryptoPayloads.KeyringData data) {
-		List<Consumer<String>> callbacks = List.copyOf(WAITING);
+		List<Waiter> waiters = List.copyOf(WAITING);
 		WAITING.clear();
 		switch (data.status()) {
-			case "ok" -> callbacks.forEach(cb -> cb.accept(data.content()));
-			case "missing" -> callbacks.forEach(cb -> cb.accept(""));
-			case "denied" -> PasswordScreen.tell("command.memorypalace.crypto_denied");
-			default -> PasswordScreen.tell("message.memorypalace.keyring_read_failed");
+			case "ok" -> waiters.forEach(w -> w.callback().accept(data.content()));
+			case "missing" -> waiters.forEach(w -> w.callback().accept(""));
+			default -> {
+				PasswordScreen.tell("denied".equals(data.status())
+						? "command.memorypalace.crypto_denied" : "message.memorypalace.keyring_read_failed");
+				waiters.forEach(w -> w.failed().run());
+			}
 		}
 	}
+
+	private record Waiter(Consumer<String> callback, Runnable failed) {}
 
 	/**
 	 * 把新钥匙圈写回服务端。oldContent 是写之前的内容（还没有时为 ""），服务端会核对，防止过期写入覆盖新内容。
