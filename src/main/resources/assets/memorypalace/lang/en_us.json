@@ -169,6 +169,8 @@
 	"message.memorypalace.capture_timeout": "no save receipt within 15 seconds (retrying will not add it twice)",
 	"message.memorypalace.capture_busy": "sent too quickly, try again in a moment",
 	"message.memorypalace.capture_invalid": "the note is empty or is not a valid inbox ciphertext",
+	"message.memorypalace.capture_server_outdated": "the server's Memory Palace version is not compatible with this client. Update the server and the client to the same version",
+	"message.memorypalace.capture_client_outdated": "Quick note not saved: your Memory Palace client is older than the server and is not compatible. Update the client to the server's version, then record the note again.",
 	"message.memorypalace.capture_seal_failed": "encryption failed (the note may be too long); it was not sent as plain text",
 	"message.memorypalace.capture_keyring_failed": "could not read the keyring to encrypt; it was not sent as plain text",
 	"message.memorypalace.capture_already_saved": "This quick note was already saved",

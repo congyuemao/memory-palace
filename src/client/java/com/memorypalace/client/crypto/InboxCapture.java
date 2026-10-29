@@ -78,6 +78,9 @@ public final class InboxCapture {
 			PasswordScreen.tell("message.memorypalace.capture_already_saved");
 			return;
 		}
+		if (serverOutdated(draft)) {
+			return; // 先挡住：不用再读钥匙圈、加密
+		}
 		if (draft.prepared()) {
 			transmit(draft); // 重发上次准备好的同一份内容（同一行密文），服务端靠编号和内容认出是同一条
 			return;
@@ -199,7 +202,23 @@ public final class InboxCapture {
 		transmit(draft);
 	}
 
+	/**
+	 * 服务端不认得这一版的随手记（0.3.0 及更早的服务端，或者没装模组）：不发，留着等找回，提示两边升级到同一版本。
+	 * 不改用旧格式发：旧格式没有回执、没法去重。
+	 */
+	private static boolean serverOutdated(CaptureOutbox.Draft draft) {
+		if (ToolPayloads.captureSupported(ClientPlayNetworking::canSend)) {
+			return false;
+		}
+		OUTBOX.fail(draft);
+		notSaved(Component.translatable("message.memorypalace.capture_server_outdated"));
+		return true;
+	}
+
 	private static void transmit(CaptureOutbox.Draft draft) {
+		if (serverOutdated(draft)) {
+			return;
+		}
 		boolean retry = OUTBOX.sending(draft, nowMs());
 		// 带上第一次按回车时的本地时间和时区："今天"按玩家所在地算（出国、跨日期变更线都对），重发也记进同一天
 		String time = draft.time().toString();

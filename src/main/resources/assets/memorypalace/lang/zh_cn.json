@@ -169,6 +169,8 @@
 	"message.memorypalace.capture_timeout": "15 秒内没收到保存结果（重试不会重复记录）",
 	"message.memorypalace.capture_busy": "发送太快，请稍后再试",
 	"message.memorypalace.capture_invalid": "内容为空，或不是有效的收件箱密文",
+	"message.memorypalace.capture_server_outdated": "服务端的记忆宫殿版本与客户端不兼容，请将服务端与客户端升级到同一版本",
+	"message.memorypalace.capture_client_outdated": "随手记未保存：客户端的记忆宫殿版本较旧，与服务端不兼容。请将客户端升级到与服务端相同的版本后重新记录。",
 	"message.memorypalace.capture_seal_failed": "加密失败（内容可能太长），没有改发明文",
 	"message.memorypalace.capture_keyring_failed": "读取不到钥匙圈，无法加密，没有改发明文",
 	"message.memorypalace.capture_already_saved": "这条随手记之前已经保存过了",
