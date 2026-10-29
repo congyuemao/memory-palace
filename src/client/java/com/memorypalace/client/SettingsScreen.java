@@ -5,6 +5,8 @@ import com.memorypalace.client.crypto.BoxPins;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.PasswordScreen;
 import com.memorypalace.client.crypto.RecoveryKeyScreen;
+import com.memorypalace.client.crypto.SecurityKey;
+import com.memorypalace.core.crypto.MasterKey;
 import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.vault.Vault;
@@ -136,8 +138,16 @@ public class SettingsScreen extends Screen {
 		Button trust = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.trust_box"),
 				b -> withKeyring(this::confirmTrust))
 				.bounds(right, y + 4 * ROW, COLUMN, 20).build());
+		// 实体钥匙（YubiKey 等）：只支持 Windows。没登记就登记一把，登记过就问要不要移除
+		boolean keySupported = SecurityKey.available();
+		Button token = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.token"),
+				b -> withKeyring(this::tokenClicked))
+				.bounds(right, y + 5 * ROW, COLUMN, 20)
+				.tooltip(Tooltip.create(Component.translatable(keySupported
+						? "settings.memorypalace.token_tooltip" : "settings.memorypalace.token_unavailable"))).build());
 		change.active = regen.active = remove.active = forgot.active = inWorld;
 		trust.active = inWorld && !this.minecraft.hasSingleplayerServer();
+		token.active = inWorld && keySupported;
 
 		// 最下面一行：左边"修改按键"（打开原版按键设置页），右边"完成"
 		int bottom = y + ROWS * ROW + 20;
@@ -202,6 +212,72 @@ public class SettingsScreen extends Screen {
 		} catch (RuntimeException e) {
 			return false;
 		}
+	}
+
+	private void tokenClicked(String keyring) {
+		KeyRing.Token registered;
+		try {
+			registered = KeyRing.token(keyring);
+		} catch (RuntimeException e) {
+			show("crypto.memorypalace.error");
+			return;
+		}
+		if (registered == null) {
+			this.minecraft.gui.setScreen(PasswordScreen.verify(keyring, Component.translatable("crypto.memorypalace.verify_token"), this,
+					(password, key) -> registerToken(keyring, key)));
+			return;
+		}
+		this.minecraft.gui.setScreen(new ConfirmScreen(yes -> {
+			if (!yes) {
+				this.minecraft.gui.setScreen(this);
+				return;
+			}
+			this.minecraft.gui.setScreen(PasswordScreen.verify(keyring, Component.translatable("crypto.memorypalace.verify_remove_token"), this,
+					(password, key) -> writeAndShow(KeyRing.withoutToken(keyring), keyring, "settings.memorypalace.token_removed")));
+		}, Component.translatable("settings.memorypalace.token_remove_title"),
+				Component.translatable("settings.memorypalace.token_remove_message"),
+				Component.translatable("settings.memorypalace.token_remove_yes"), CommonComponents.GUI_CANCEL));
+	}
+
+	/**
+	 * 登记实体钥匙：在钥匙上建凭据，再让钥匙对新的盐算一次（两次都要玩家在 Windows 对话框里操作），
+	 * 用结果锁一份主密钥写回钥匙圈。Windows 的调用会一直等到玩家操作完，所以放在后台线程。
+	 */
+	private void registerToken(String keyring, MasterKey key) {
+		MasterKey copy = new MasterKey(key.bytes()); // 回调结束后原来那把可能被上锁销毁：自己留一份，用完销毁
+		this.minecraft.gui.setScreen(this);
+		show("settings.memorypalace.token_registering");
+		Thread.ofPlatform().name("memorypalace-security-key").daemon(true).start(() -> {
+			String content = null;
+			Component failure = null;
+			try {
+				byte[] credential = SecurityKey.register();
+				byte[] salt = KeyRing.newTokenSalt();
+				byte[] output = SecurityKey.prf(credential, salt);
+				try {
+					content = KeyRing.withToken(keyring, copy, credential, salt, output);
+					KeyRing.unlockWithToken(content, output).destroy(); // 存之前先确认用它真能解开
+				} finally {
+					java.util.Arrays.fill(output, (byte) 0);
+				}
+			} catch (SecurityKey.Failure e) {
+				failure = e.message();
+			} catch (Exception e) {
+				com.memorypalace.MemoryPalace.LOGGER.error("登记实体钥匙失败", e);
+				failure = Component.translatable("message.memorypalace.token_failed");
+			} finally {
+				copy.destroy();
+			}
+			String result = content;
+			Component error = failure;
+			this.minecraft.execute(() -> {
+				if (result == null) {
+					message = error;
+					return;
+				}
+				writeAndShow(result, keyring, "settings.memorypalace.token_added");
+			});
+		});
 	}
 
 	/** 拿到钥匙圈再继续；还没启用过加密就提示一下。 */

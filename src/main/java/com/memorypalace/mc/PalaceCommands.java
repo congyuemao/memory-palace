@@ -577,6 +577,7 @@ public final class PalaceCommands {
 		}
 		try {
 			NoteSummary renamed = vault.renameNote(note.get().id(), StringArgumentType.getString(ctx, "name"));
+			NoteBooks.refreshCarried(ctx.getSource().getServer(), renamed);
 			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.renamed",
 					note.get().relativePath(), renamed.relativePath()), false);
 			return 1;

@@ -209,6 +209,8 @@ public final class EditPayloads {
 			reply(player, chunk, result.name(), result == Vault.WriteResult.OK ? Vault.hash(body) : "");
 			if (result == Vault.WriteResult.OK) {
 				NoteItemUse.afterSave(player, chunk.noteId(), body, guard); // 抄进被锁文件夹的抄本：存好了才换成笔记书
+				// 加密了、改了标题：背包里的书马上换贴图、书名
+				vault.find(chunk.noteId()).ifPresent(note -> NoteBooks.refreshCarried(player.level().getServer(), note));
 			}
 		} catch (IOException | RuntimeException e) {
 			MemoryPalace.LOGGER.error("保存笔记 {} 失败", chunk.noteId(), e);

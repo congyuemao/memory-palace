@@ -293,8 +293,8 @@ public final class ToolPayloads {
 	 * 读不了、标题也不是人人可见的笔记：和书名一样只有"【私密笔记】#7f3a"，不带路径（见 NoteBooks.titleFor）。
 	 */
 	private static String label(NoteSummary note, boolean canRead) {
-		if (!canRead && (note.encrypted() || !PalaceAccess.titleIsPublic(note))) {
-			return NoteBooks.titleFor(note); // 读不了：和书名一样，只有"【加密笔记】#7f3a"这种，不带路径
+		if (!canRead && !PalaceAccess.titleIsPublic(note)) {
+			return NoteBooks.titleFor(note); // 读不了、标题也不公开：和书名一样，只有"【私密笔记】#7f3a"这种，不带路径
 		}
 		if (note.encrypted()) {
 			String path = note.relativePath();

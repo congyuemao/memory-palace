@@ -44,6 +44,7 @@ public class PasswordScreen extends Screen {
 	private final Runnable onSuccess;
 	private final Runnable onAbandon; // 结果作废时销毁临时密钥等
 	private final Runnable onForgot;  // null = 不显示"忘记密码"
+	private final Check keyCheck;     // null = 不显示"使用实体钥匙"；不用输入框，values 是空的
 
 	private EditBox[] fields;
 	private Button okButton;
@@ -52,7 +53,13 @@ public class PasswordScreen extends Screen {
 
 	private PasswordScreen(Component title, Component message, Component[] hints, boolean masked, Screen returnTo,
 			Check check, Runnable onSuccess, Runnable onAbandon, Runnable onForgot) {
+		this(title, message, hints, masked, returnTo, check, onSuccess, onAbandon, onForgot, null);
+	}
+
+	private PasswordScreen(Component title, Component message, Component[] hints, boolean masked, Screen returnTo,
+			Check check, Runnable onSuccess, Runnable onAbandon, Runnable onForgot, Check keyCheck) {
 		super(title);
+		this.keyCheck = keyCheck;
 		this.message = message;
 		this.hints = hints;
 		this.masked = masked;
@@ -263,10 +270,24 @@ public class PasswordScreen extends Screen {
 		return screen;
 	}
 
-	/** 解锁：输密码。钥匙圈里有恢复密钥时显示"忘记密码？"。 */
+	/**
+	 * 解锁：输密码。钥匙圈里有恢复密钥时显示"忘记密码？"；登记过实体钥匙（而且这台电脑能用）时显示"使用实体钥匙"。
+	 */
 	public static PasswordScreen unlock(String keyring, Screen returnTo, Runnable then) {
 		AtomicReference<MasterKey> key = new AtomicReference<>();
 		boolean hasRecovery = safeHasRecovery(keyring);
+		KeyRing.Token token = safeToken(keyring);
+		Check byKey = token == null || !SecurityKey.available() ? null : values -> {
+			byte[] output = SecurityKey.prf(token.credentialId(), token.salt());
+			try {
+				key.set(KeyRing.unlockWithToken(keyring, output));
+			} catch (WrongKeyException e) {
+				return t("token_wrong");
+			} finally {
+				Arrays.fill(output, (byte) 0);
+			}
+			return null;
+		};
 		return new PasswordScreen(t("unlock_title"), t("unlock_message"), new Component[]{t("password")}, true, returnTo,
 				values -> {
 					key.set(KeyRing.unlock(keyring, values[0]));
@@ -277,7 +298,8 @@ public class PasswordScreen extends Screen {
 					then.run();
 				},
 				() -> destroy(key.get()),
-				hasRecovery ? () -> Minecraft.getInstance().gui.setScreen(recover(keyring, returnTo, then)) : null);
+				hasRecovery ? () -> Minecraft.getInstance().gui.setScreen(recover(keyring, returnTo, then)) : null,
+				byKey);
 	}
 
 	/** 忘记密码：输恢复密钥 → 设新密码 → 继续 then。原密码没有保存，只能重置。 */
@@ -446,6 +468,14 @@ public class PasswordScreen extends Screen {
 		return null;
 	}
 
+	private static KeyRing.Token safeToken(String keyring) {
+		try {
+			return KeyRing.token(keyring);
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
 	private static boolean safeHasRecovery(String keyring) {
 		try {
 			return KeyRing.hasRecovery(keyring);
@@ -530,9 +560,25 @@ public class PasswordScreen extends Screen {
 		okButton = addRenderableWidget(Button.builder(CommonComponents.GUI_OK, b -> submit()).bounds(x, buttonsY, 98, 20).build());
 		okButton.active = !busy;
 		addRenderableWidget(Button.builder(CommonComponents.GUI_CANCEL, b -> onClose()).bounds(x + 102, buttonsY, 98, 20).build());
+		int extraY = buttonsY + 24;
 		if (onForgot != null) {
-			addRenderableWidget(Button.builder(t("forgot"), b -> onForgot.run()).bounds(x, buttonsY + 24, 200, 20).build());
+			addRenderableWidget(Button.builder(t("forgot"), b -> onForgot.run()).bounds(x, extraY, 200, 20).build());
+			extraY += 24;
 		}
+		if (keyCheck != null) {
+			keyButton = addRenderableWidget(Button.builder(t("use_token"), b -> useKey()).bounds(x, extraY, 200, 20).build());
+			keyButton.active = !busy;
+		}
+	}
+
+	private Button keyButton;
+
+	/** 用实体钥匙解锁：不用输入框，Windows 会弹出对话框引导插钥匙、输 PIN、触摸。 */
+	private void useKey() {
+		if (busy) {
+			return;
+		}
+		run(keyCheck, new char[0][], t("token_waiting"));
 	}
 
 	/** 成功后还在等服务端确认（比如钥匙圈存盘）：锁住按钮并显示提示。 */
@@ -553,14 +599,25 @@ public class PasswordScreen extends Screen {
 			values[i] = fields[i].getValue().toCharArray();
 			fields[i].setValue("");
 		}
+		run(check, values, t("checking"));
+	}
+
+	/** 在后台线程跑 check（values 用完清零），跑完回到渲染线程显示结果或执行 onSuccess。 */
+	private void run(Check check, char[][] values, Component waiting) {
 		busy = true;
 		okButton.active = false;
-		status = t("checking");
+		if (keyButton != null) {
+			keyButton.active = false;
+		}
+		status = waiting;
 		int generation = ClientKeys.generation();
-		Thread.ofVirtual().name("memorypalace-password").start(() -> {
+		// 实体钥匙要等 Windows 的对话框，可能好几十秒：用普通线程，别占着虚拟线程的载体
+		Thread.ofPlatform().daemon(true).name("memorypalace-password").start(() -> {
 			Component error;
 			try {
 				error = check.run(values);
+			} catch (SecurityKey.Failure e) {
+				error = e.message();
 			} catch (WrongKeyException e) {
 				error = t(masked ? "wrong_password" : "wrong_recovery");
 			} catch (IllegalArgumentException e) {
@@ -583,6 +640,9 @@ public class PasswordScreen extends Screen {
 				}
 				busy = false;
 				okButton.active = true;
+				if (keyButton != null) {
+					keyButton.active = true;
+				}
 				if (result == null) {
 					status = Component.empty();
 					onSuccess.run();
@@ -629,7 +689,7 @@ public class PasswordScreen extends Screen {
 			graphics.centeredText(this.font, line, this.width / 2, y, 0xFFC0C0C0);
 			y += 10;
 		}
-		int statusY = top + hints.length * 24 + (onForgot != null ? 58 : 34);
+		int statusY = top + hints.length * 24 + 34 + (onForgot != null ? 24 : 0) + (keyCheck != null ? 24 : 0);
 		graphics.centeredText(this.font, status, this.width / 2, statusY, 0xFFFF8080);
 	}
 

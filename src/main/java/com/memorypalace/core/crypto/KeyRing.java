@@ -40,6 +40,11 @@ import java.util.Set;
  * AAD 前缀为 memory-palace|keyring|1|，之后是用途及该包装的算法、参数和盐，字段用 | 分隔。
  * 恢复包装使用独立盐，HKDF info 为 memory-palace|keyring|1|recovery，输出 32 字节。
  *
+ * 可选的实体钥匙（FIDO2 安全密钥，如 YubiKey）字段必须一起出现：token.credential、token.salt、token.wrap。
+ * credential 是钥匙上那个凭据的 ID（1–1023 字节），salt 是每次都发给钥匙的 32 字节随机数，
+ * 钥匙用它算出固定的 32 字节结果（WebAuthn 的 PRF / hmac-secret 扩展）；结果经 HKDF 得到包装密钥，同样 AES-256-GCM 包主密钥，
+ * AAD 绑定 credential 和 salt。只有普通钥匙圈能加，文件夹钥匙不能。
+ *
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class KeyRing {
@@ -57,6 +62,10 @@ public final class KeyRing {
 	// 收件箱钥匙（可选，两个字段一起出现）：box.public = 公钥（X.509，明文，随手记加密用，不需要密码）；
 	// box.wrap = 用主密钥派生的钥匙包好的私钥（PKCS#8），AAD 绑定公钥
 	private static final Set<String> BOX_FIELDS = Set.of("box.public", "box.wrap");
+	// 实体钥匙（可选，三个字段一起出现）：见类注释
+	private static final Set<String> TOKEN_FIELDS = Set.of("token.credential", "token.salt", "token.wrap");
+	/** 实体钥匙的盐（发给钥匙的 PRF 输入）和它算出来的结果都是 32 字节。 */
+	public static final int TOKEN_SECRET = 32;
 	// 文件夹钥匙的 ID（只有文件夹的锁才有，见 createFolder）：写进 MPAL2 笔记的 f 锁里，用来找到是哪一把
 	private static final String FOLDER_ID = "folder.id";
 	private static final java.util.regex.Pattern FOLDER_ID_PATTERN = java.util.regex.Pattern.compile("[A-Za-z0-9_-]{22}");
@@ -201,6 +210,83 @@ public final class KeyRing {
 			return serialize(fields);
 		} finally {
 			key.destroy();
+		}
+	}
+
+	// ---- 实体钥匙 ----
+
+	/** 钥匙圈里登记的实体钥匙：凭据 ID 和每次发给钥匙的盐。 */
+	public record Token(byte[] credentialId, byte[] salt) {}
+
+	/** 登记的实体钥匙；没有时为 null。 */
+	public static Token token(String content) {
+		Map<String, String> fields = parse(content);
+		if (!fields.containsKey("token.wrap")) {
+			return null;
+		}
+		return new Token(decodeBetween(fields.get("token.credential"), 1, 1023), decode(fields.get("token.salt"), TOKEN_SECRET));
+	}
+
+	/** 给新登记的实体钥匙用的随机盐。 */
+	public static byte[] newTokenSalt() {
+		return randomBytes(TOKEN_SECRET);
+	}
+
+	/**
+	 * 登记一把实体钥匙（替换掉原来登记的）：用钥匙对 salt 算出的结果 prfOutput 锁一份主密钥。
+	 * key 必须是这个钥匙圈解锁出来的主密钥。文件夹钥匙、参数长度不对 → IllegalArgumentException。返回新内容。
+	 */
+	public static String withToken(String content, MasterKey key, byte[] credentialId, byte[] salt, byte[] prfOutput) {
+		Map<String, String> fields = parse(content);
+		if (fields.containsKey(FOLDER_ID) || credentialId == null || credentialId.length < 1 || credentialId.length > 1023
+				|| salt == null || salt.length != TOKEN_SECRET || prfOutput == null || prfOutput.length != TOKEN_SECRET) {
+			throw new IllegalArgumentException("实体钥匙参数不对");
+		}
+		byte[] secret = NoteCipher.copyKey(key);
+		byte[] wrappingKey = null;
+		try {
+			fields.put("token.credential", Base64.getEncoder().encodeToString(credentialId));
+			fields.put("token.salt", Base64.getEncoder().encodeToString(salt));
+			wrappingKey = tokenWrappingKey(prfOutput, salt);
+			fields.put("token.wrap", Base64.getEncoder().encodeToString(NoteCipher.seal(wrappingKey, aad(fields, "token"), secret)));
+			return serialize(fields);
+		} finally {
+			NoteCipher.wipe(secret);
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	/** 去掉登记的实体钥匙（没有就原样返回）。密码、恢复密钥不受影响。 */
+	public static String withoutToken(String content) {
+		Map<String, String> fields = parse(content);
+		TOKEN_FIELDS.forEach(fields::remove);
+		return serialize(fields);
+	}
+
+	/** 用实体钥匙对 token.salt 算出的结果解锁。没登记、不是这把钥匙、被改过 → WrongKeyException。 */
+	public static MasterKey unlockWithToken(String content, byte[] prfOutput) throws WrongKeyException {
+		Map<String, String> fields = parse(content);
+		if (!fields.containsKey("token.wrap") || prfOutput == null || prfOutput.length != TOKEN_SECRET) {
+			throw NoteCipher.wrongKey();
+		}
+		byte[] salt = decode(fields.get("token.salt"), TOKEN_SECRET);
+		byte[] wrappingKey = null;
+		try {
+			wrappingKey = tokenWrappingKey(prfOutput, salt);
+			return unwrap(fields, "token", wrappingKey);
+		} finally {
+			NoteCipher.wipe(salt);
+			NoteCipher.wipe(wrappingKey);
+		}
+	}
+
+	private static byte[] tokenWrappingKey(byte[] prfOutput, byte[] salt) {
+		try {
+			return KDF.getInstance("HKDF-SHA256").deriveData(HKDFParameterSpec.ofExtract()
+					.addIKM(prfOutput).addSalt(salt)
+					.thenExpand((DOMAIN + "token").getBytes(StandardCharsets.UTF_8), MasterKey.LENGTH));
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("无法执行 HKDF-SHA-256");
 		}
 	}
 
@@ -374,6 +460,8 @@ public final class KeyRing {
 					+ "|" + fields.get("kdf.iterations") + "|" + fields.get("kdf.parallelism")
 					+ "|" + fields.get("kdf.length") + "|" + fields.get("password.salt");
 			case "recovery" -> fields.get("recovery.kdf") + "|" + fields.get("recovery.salt");
+			// 包装绑定这把钥匙的凭据和盐：换成别的凭据或盐都解不开
+			case "token" -> fields.get("token.credential") + "|" + fields.get("token.salt");
 			// 私钥和公钥绑在一起：把公钥换掉，私钥就解不开了
 			default -> fields.get("box.public");
 		};
@@ -396,7 +484,7 @@ public final class KeyRing {
 			}
 			String name = line.substring(0, equals);
 			if ((!PASSWORD_FIELDS.contains(name) && !RECOVERY_FIELDS.contains(name) && !BOX_FIELDS.contains(name)
-					&& !FOLDER_ID.equals(name))
+					&& !TOKEN_FIELDS.contains(name) && !FOLDER_ID.equals(name))
 					|| fields.putIfAbsent(name, line.substring(equals + 1)) != null) {
 				throw invalidContent();
 			}
@@ -424,6 +512,14 @@ public final class KeyRing {
 		}
 		if (fields.containsKey(FOLDER_ID) && !FOLDER_ID_PATTERN.matcher(fields.get(FOLDER_ID)).matches()) {
 			throw invalidContent();
+		}
+		if (TOKEN_FIELDS.stream().anyMatch(fields::containsKey)) {
+			if (!fields.keySet().containsAll(TOKEN_FIELDS) || fields.containsKey(FOLDER_ID)) {
+				throw invalidContent();
+			}
+			decodeBetween(fields.get("token.credential"), 1, 1023);
+			decode(fields.get("token.salt"), TOKEN_SECRET);
+			decode(fields.get("token.wrap"), 60);
 		}
 		if (BOX_FIELDS.stream().anyMatch(fields::containsKey)) {
 			if (!fields.keySet().containsAll(BOX_FIELDS) || fields.containsKey(FOLDER_ID)) {

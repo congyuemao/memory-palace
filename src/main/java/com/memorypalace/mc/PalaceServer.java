@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Clock;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -158,6 +159,28 @@ public final class PalaceServer {
 	public static boolean othersCanJoin() {
 		MinecraftServer s = server;
 		return s == null || s.isDedicatedServer() || s.isPublished();
+	}
+
+	/** 玩家名：在线的直接取，不在线的查服务器的名字缓存（usercache.json）；都没有时 empty。 */
+	public static Optional<String> playerName(java.util.UUID id) {
+		MinecraftServer s = server;
+		if (s == null) {
+			return Optional.empty();
+		}
+		var online = s.getPlayerList().getPlayer(id);
+		if (online != null) {
+			return Optional.of(online.getGameProfile().name());
+		}
+		return s.services().nameToIdCache().get(id).map(net.minecraft.server.players.NameAndId::name);
+	}
+
+	/** 房主的名字（单人游戏、自己开的局域网）；专用服务器上没有房主，empty。 */
+	public static Optional<String> hostName() {
+		MinecraftServer s = server;
+		if (s == null || s.isDedicatedServer() || s.getSingleplayerProfile() == null) {
+			return Optional.empty();
+		}
+		return Optional.of(s.getSingleplayerProfile().name());
 	}
 
 	/** 当前世界的笔记库；世界没开或打开失败时为 null。 */
