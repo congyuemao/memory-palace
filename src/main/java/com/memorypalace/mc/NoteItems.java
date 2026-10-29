@@ -71,13 +71,33 @@ public final class NoteItems {
 		return stack;
 	}
 
-	/** 空白抄本：右键把 source 这篇抄一份。 */
+	/**
+	 * 空白抄本：把 source 这篇抄一份。刚合成出来的带 auto_copy 标记，进了背包就自动抄好（见 NoteItemUse.autoCopy）；
+	 * 自动抄不了的（加密笔记要客户端重新加密、抄进上锁的文件夹、没权限）去掉标记，留着右键抄。
+	 */
 	public static ItemStack copyBlank(UUID source) {
 		ItemStack stack = blank(false);
-		update(stack, data -> data.putString("copy_of", source.toString()));
+		update(stack, data -> {
+			data.putString("copy_of", source.toString());
+			data.putBoolean("auto_copy", true);
+		});
 		stack.set(DataComponents.ITEM_NAME, Component.literal("记忆笔记抄本（空白）"));
-		stack.set(DataComponents.LORE, lore("右键：把原笔记抄成一篇独立的新笔记", "（只有读得了原笔记的人能抄）"));
+		stack.set(DataComponents.LORE, lore("放进背包后自动抄成一篇独立的新笔记", "（加密笔记要右键抄写；只有读得了原笔记的人能抄）"));
 		return stack;
+	}
+
+	/** 刚合成出来、还没试过自动抄写的抄本。 */
+	static boolean autoCopy(ItemStack stack) {
+		return copyOf(stack).isPresent() && flag(tag(stack), "auto_copy");
+	}
+
+	/** 不再自动抄：改成右键抄。 */
+	static void clearAutoCopy(ItemStack stack) {
+		if (!autoCopy(stack)) {
+			return;
+		}
+		update(stack, data -> data.remove("auto_copy"));
+		stack.set(DataComponents.LORE, lore("右键：把原笔记抄成一篇独立的新笔记", "（只有读得了原笔记的人能抄）"));
 	}
 
 	/** 是不是空白笔记（含空白上锁笔记、空白抄本）。 */

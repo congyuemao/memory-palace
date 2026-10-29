@@ -53,10 +53,22 @@ public final class BookSettings {
 		}
 	}
 
+	/** 编辑器自动保存：有没保存的修改时每隔这么多分钟存一次。minutes = 0 表示不自动保存。 */
+	public enum AutoSave {
+		OFF(0), MIN_1(1), MIN_5(5), MIN_10(10);
+
+		public final int minutes;
+
+		AutoSave(int minutes) {
+			this.minutes = minutes;
+		}
+	}
+
 	private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("memorypalace.properties");
 	private static PageSize pageSize = PageSize.FIT;
 	private static FontSize fontSize = FontSize.NORMAL;
 	private static AutoLock autoLock = AutoLock.MIN_10;
+	private static AutoSave autoSave = AutoSave.MIN_5;
 	private static boolean inboxEncryption = true;
 	private static boolean loaded;
 
@@ -75,6 +87,16 @@ public final class BookSettings {
 	public static AutoLock autoLock() {
 		load();
 		return autoLock;
+	}
+
+	public static AutoSave autoSave() {
+		load();
+		return autoSave;
+	}
+
+	public static void setAutoSave(AutoSave value) {
+		autoSave = value;
+		save();
 	}
 
 	/** 随手记要不要用收件箱公钥加密（钥匙圈里有收件箱钥匙时才生效）。默认开。 */
@@ -128,6 +150,7 @@ public final class BookSettings {
 			pageSize = parse(PageSize.class, p.getProperty("page_size"), PageSize.FIT);
 			fontSize = parse(FontSize.class, p.getProperty("font_size"), FontSize.NORMAL);
 			autoLock = parse(AutoLock.class, p.getProperty("auto_lock"), AutoLock.MIN_10);
+			autoSave = parse(AutoSave.class, p.getProperty("auto_save"), AutoSave.MIN_5);
 			inboxEncryption = !"false".equals(p.getProperty("inbox_encryption"));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.warn("读取设置失败，使用默认值", e);
@@ -147,6 +170,7 @@ public final class BookSettings {
 		p.setProperty("page_size", pageSize.name());
 		p.setProperty("font_size", fontSize.name());
 		p.setProperty("auto_lock", autoLock.name());
+		p.setProperty("auto_save", autoSave.name());
 		p.setProperty("inbox_encryption", Boolean.toString(inboxEncryption));
 		try (Writer w = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {
 			p.store(w, "Memory Palace settings");

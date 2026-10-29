@@ -8,6 +8,7 @@ import com.memorypalace.core.vault.NoteHistory;
 import com.memorypalace.core.vault.NoteLocations;
 import com.memorypalace.core.vault.NoteSummary;
 import com.memorypalace.core.vault.Vault;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -66,6 +67,27 @@ public final class PalaceCommands {
 								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
 								.then(Commands.argument("path", StringArgumentType.greedyString())
 										.executes(ctx -> create(ctx, false))))
+						.then(Commands.literal("newfolder")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(PalaceCommands::createFolder)))
+						// 改名：新名字可以带空格，要加引号，例如 /palace rename "新 名字" 旧笔记
+						.then(Commands.literal("rename")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
+								.then(Commands.argument("name", StringArgumentType.string())
+										.then(Commands.argument("note", StringArgumentType.greedyString())
+												.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
+												.executes(PalaceCommands::rename))))
+						// 删除：先问一次，点"确认删除"才真的挪进回收站
+						.then(Commands.literal("delete")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
+										.executes(ctx -> delete(ctx, false))))
+						.then(Commands.literal("deleteconfirm")
+								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.CREATE))
+								.then(Commands.argument("path", StringArgumentType.greedyString())
+										.executes(ctx -> delete(ctx, true))))
 						// 笔记写在最后（路径里可以有空格、中文、斜杠，只有放在最后才能整段读进来）
 						.then(Commands.literal("share")
 								.requires(source -> PalaceAccess.allowed(source, PalaceAccess.SHARE))
@@ -136,7 +158,12 @@ public final class PalaceCommands {
 								.requires(PalaceCommands::enabled)
 								.then(Commands.argument("note", StringArgumentType.greedyString())
 										.suggests((ctx, builder) -> SharedSuggestionProvider.suggest(noteSuggestions(ctx.getSource()), builder))
-										.executes(PalaceCommands::history)))
+										.executes(ctx -> history(ctx, 1))))
+						.then(Commands.literal("historypage")
+								.requires(PalaceCommands::enabled)
+								.then(Commands.argument("page", IntegerArgumentType.integer(1))
+										.then(Commands.argument("note", StringArgumentType.greedyString())
+												.executes(ctx -> history(ctx, IntegerArgumentType.getInteger(ctx, "page"))))))
 						.then(Commands.literal("historyview")
 								.requires(PalaceCommands::enabled)
 								.then(Commands.argument("version", StringArgumentType.word())
@@ -344,8 +371,14 @@ public final class PalaceCommands {
 		return note;
 	}
 
-	/** /palace history &lt;笔记&gt;：列出历史版本（最新的在前），每条可以点"查看"、"还原"。 */
-	private static int history(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+	/** 历史列表每页几条。 */
+	private static final int HISTORY_PAGE = 10;
+
+	/**
+	 * /palace history &lt;笔记&gt;（/palace historypage &lt;页&gt; &lt;笔记&gt;）：列出历史版本（最新的在前），
+	 * 每条带"比更早一份 +几行 −几行"，可以点"查看"、"还原"；一页 HISTORY_PAGE 条，末尾有"更早的"链接。
+	 */
+	private static int history(CommandContext<CommandSourceStack> ctx, int page) throws CommandSyntaxException {
 		Vault vault = requireVault(ctx);
 		if (vault == null || vault.history() == null) {
 			return 0;
@@ -366,12 +399,19 @@ public final class PalaceCommands {
 			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.history_empty", note.get().title()), false);
 			return 0;
 		}
-		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.history_header", note.get().title()), false);
+		int pages = (versions.size() + HISTORY_PAGE - 1) / HISTORY_PAGE;
+		int shown = Math.min(page, pages);
+		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.history_header", note.get().title(),
+				versions.size(), shown, pages), false);
 		String path = noteCommandPath(note.get());
-		for (int i = 0; i < versions.size(); i++) {
+		for (int i = (shown - 1) * HISTORY_PAGE; i < Math.min(versions.size(), shown * HISTORY_PAGE); i++) {
 			NoteHistory.Version v = versions.get(i);
 			var line = Component.literal("  " + (i + 1) + ". ").append(ago(v.time().toEpochMilli()))
 					.append(" · ").append(Component.translatable("command.memorypalace.history_chars", v.chars()));
+			if (v.added() >= 0) {
+				line.append(" · ").append(Component.literal("+" + v.added()).withStyle(Style.EMPTY.withColor(0x55FF55)))
+						.append(" ").append(Component.literal("−" + v.removed()).withStyle(Style.EMPTY.withColor(0xFF5555)));
+			}
 			if (v.encrypted()) {
 				line.append(" · ").append(Component.translatable("command.memorypalace.history_encrypted"));
 			}
@@ -380,6 +420,10 @@ public final class PalaceCommands {
 			line.append(" ").append(link("command.memorypalace.history_restore", "command.memorypalace.history_restore_hover",
 					"/palace historyrestore " + v.id() + " " + path));
 			ctx.getSource().sendSuccess(() -> line, false);
+		}
+		if (shown < pages) {
+			ctx.getSource().sendSuccess(() -> link("command.memorypalace.history_older", "command.memorypalace.history_older_hover",
+					"/palace historypage " + (shown + 1) + " " + path), false);
 		}
 		return versions.size();
 	}
@@ -478,6 +522,131 @@ public final class PalaceCommands {
 		openCreated(player, created.get(), secret);
 		ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.created", created.get().note().relativePath()), false);
 		return 1;
+	}
+
+	/**
+	 * /palace newfolder &lt;文件夹&gt;：新建一个空文件夹（可以多层）。房主、管理员建在输入的位置，
+	 * 普通玩家建在自己的个人区里。之后可以 /palace lockfolder 给它设密码，或者 /palace new 文件夹/笔记 往里放笔记。
+	 */
+	private static int createFolder(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		boolean admin = PalaceAccess.admin(player);
+		if (!admin && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
+		String input = StringArgumentType.getString(ctx, "path").strip();
+		try {
+			String folder = vault.createFolder(admin ? input : personalFolder(player) + "/" + input);
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.folder_created", folder), false);
+			return 1;
+		} catch (IllegalArgumentException e) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", e.getMessage()));
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.error("新建文件夹失败", e);
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", e.getMessage()));
+		}
+		return 0;
+	}
+
+	/** /palace rename "&lt;新名字&gt;" &lt;笔记&gt;：只改文件名、留在原来的文件夹；只有作者（无主笔记是管理员）能改。 */
+	private static int rename(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		String path = StringArgumentType.getString(ctx, "note").strip();
+		Optional<NoteSummary> note = resolveNote(vault, player, path).filter(n -> PalaceAccess.canRead(player, n));
+		if (note.isEmpty()) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", path));
+			return 0;
+		}
+		boolean admin = PalaceAccess.admin(player);
+		if (!admin && !NoteAccess.isOwner(note.get().access(), PalaceAccess.who(player))) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.owner_only", note.get().relativePath()));
+			return 0;
+		}
+		if (!admin && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
+		try {
+			NoteSummary renamed = vault.renameNote(note.get().id(), StringArgumentType.getString(ctx, "name"));
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.renamed",
+					note.get().relativePath(), renamed.relativePath()), false);
+			return 1;
+		} catch (IllegalArgumentException e) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.error("笔记改名失败", e);
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
+		}
+		return 0;
+	}
+
+	/**
+	 * /palace delete &lt;笔记或文件夹&gt;：先问一次，点"确认删除"（/palace deleteconfirm）才挪进回收站 .palace/trash/，
+	 * 不真的删掉。笔记只有作者能删；文件夹：管理员都能删，普通玩家只能删自己个人区里、里面全是自己笔记的。
+	 */
+	private static int delete(CommandContext<CommandSourceStack> ctx, boolean confirmed) throws CommandSyntaxException {
+		Vault vault = requireVault(ctx);
+		if (vault == null) {
+			return 0;
+		}
+		ServerPlayer player = ctx.getSource().getPlayerOrException();
+		boolean admin = PalaceAccess.admin(player);
+		NoteAccess.Who who = PalaceAccess.who(player);
+		String input = StringArgumentType.getString(ctx, "path").strip().replaceAll("[/\\\\]+$", "");
+		Optional<NoteSummary> note = resolveNote(vault, player, input).filter(n -> PalaceAccess.canRead(player, n));
+		String target;
+		String shown;
+		if (note.isPresent()) {
+			if (!admin && !NoteAccess.isOwner(note.get().access(), who)) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.owner_only", note.get().relativePath()));
+				return 0;
+			}
+			target = note.get().relativePath();
+			shown = noteCommandPath(note.get());
+		} else {
+			String folder = folderFromInput(vault, player, input);
+			if (folder.isEmpty() || folder.startsWith(".") || !java.nio.file.Files.isDirectory(vault.root().resolve(folder))) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.not_found", input));
+				return 0;
+			}
+			if (!admin && (!folder.startsWith(personalFolder(player) + "/")
+					|| FolderPayloads.notesIn(vault, folder).stream().anyMatch(n -> !NoteAccess.isOwner(n.access(), who)))) {
+				ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_folder_denied"));
+				return 0;
+			}
+			target = folder;
+			shown = folder;
+		}
+		if (!confirmed) {
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.delete_confirm", target)
+					.append(" ").append(link("command.memorypalace.delete_yes", "command.memorypalace.delete_yes_hover",
+							"/palace deleteconfirm " + shown)), false);
+			return 1;
+		}
+		if (!admin && !WRITE_RATE.tryTake(player.getUUID())) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.too_fast"));
+			return 0;
+		}
+		try {
+			String trashed = vault.moveToTrash(target, java.time.Instant.now());
+			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.deleted", target, trashed), false);
+			return 1;
+		} catch (IllegalArgumentException e) {
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", e.getMessage()));
+		} catch (IOException e) {
+			MemoryPalace.LOGGER.error("删除失败", e);
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", e.getMessage()));
+		}
+		return 0;
 	}
 
 	/** 新建好的笔记：note、它现在的正文、它在不在被锁的文件夹里（在的话是哪个）。 */

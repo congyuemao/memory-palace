@@ -51,7 +51,7 @@ public final class PalaceServer {
 			Path root = worldDir.resolve(VAULT_DIR);
 			try {
 				Vault v = new Vault(root);
-				v.setHistory(new NoteHistory(v.root(), Clock.systemUTC())); // 游戏内保存时留历史版本
+				v.setHistory(new NoteHistory(v.root(), Clock.systemDefaultZone())); // 游戏内保存时留历史版本；"每小时、每天留一份"按本机时区
 				writeWelcomeNoteIfEmpty(root);
 				v.scan();
 				worldVisibility = loadVisibility(root);
@@ -218,6 +218,10 @@ public final class PalaceServer {
 				- /palace where 笔记名：查看该笔记所在的书架与讲台
 				- /palace new 路径：新建笔记并在游戏内编辑
 				- /palace newsecret 路径：新建加密笔记
+				- /palace newfolder 路径：新建文件夹
+				- /palace rename "新名字" 笔记名：给笔记改名
+				- /palace delete 笔记或文件夹：删除（移进 .palace/trash 回收站，可以找回）
+				- /palace history 笔记名：查看、还原历史版本
 
 				每次进入世界时，笔记库会自动备份至 .minecraft/memory-palace-backups/。
 				""", StandardCharsets.UTF_8);

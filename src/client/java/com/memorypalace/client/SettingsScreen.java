@@ -63,6 +63,10 @@ public class SettingsScreen extends Screen {
 			BookSettings.setInboxEncryption(!BookSettings.inboxEncryption());
 			b.setMessage(inboxEncryptionLabel());
 		}).bounds(left, y + 3 * ROW, COLUMN, 20).build());
+		addRenderableWidget(Button.builder(autoSaveLabel(), b -> {
+			BookSettings.setAutoSave(BookSettings.next(BookSettings.autoSave()));
+			b.setMessage(autoSaveLabel());
+		}).bounds(left, y + 4 * ROW, COLUMN, 20).build());
 
 		// 密码相关：都要先输入当前密码证明是本人。钥匙圈存在当前世界（服务器）上，每人一个，所以要在世界里才能用
 		boolean inWorld = this.minecraft.player != null;
@@ -222,6 +226,10 @@ public class SettingsScreen extends Screen {
 
 	private static Component autoLockLabel() {
 		return Component.translatable("settings.memorypalace.autolock", BookSettings.label(BookSettings.autoLock()));
+	}
+
+	private static Component autoSaveLabel() {
+		return Component.translatable("settings.memorypalace.autosave", BookSettings.label(BookSettings.autoSave()));
 	}
 
 	private static Component inboxEncryptionLabel() {

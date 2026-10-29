@@ -23,7 +23,7 @@ import java.util.function.Predicate;
  * - 记忆笔记（空白）= 书与笔 + 青金石
  * - 上锁笔记（空白）= 空白记忆笔记 + 铁锭 + 绊线钩
  * - 给已有笔记上锁 = 笔记书 + 铁锭 + 绊线钩 → 标成"待上锁"，作者下次右键时在客户端加密（服务端不能加密）
- * - 抄本 = 笔记书 + 空白记忆笔记 → 空白抄本（右键时抄成独立的新笔记），原来的笔记书留在合成格里
+ * - 抄本 = 笔记书 + 空白记忆笔记 → 空白抄本，进了背包就自动抄成独立的新笔记（加密笔记要右键），原来的笔记书留在合成格里
  * 配方 JSON 在 data/memorypalace/recipe/ 下，只写 type。
  */
 public final class NoteRecipes {
@@ -158,5 +158,7 @@ public final class NoteRecipes {
 		Registry.register(BuiltInRegistries.RECIPE_SERIALIZER, MemoryPalace.id("locked_memory_note"), LockedBlankNote.SERIALIZER);
 		Registry.register(BuiltInRegistries.RECIPE_SERIALIZER, MemoryPalace.id("lock_note"), LockNote.SERIALIZER);
 		Registry.register(BuiltInRegistries.RECIPE_SERIALIZER, MemoryPalace.id("copy_note"), CopyNote.SERIALIZER);
+		// 合成出来的抄本进了背包就自动抄好，不用再右键
+		net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(NoteItemUse::tick);
 	}
 }

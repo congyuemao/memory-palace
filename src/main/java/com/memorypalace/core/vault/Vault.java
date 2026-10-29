@@ -472,18 +472,14 @@ public final class Vault {
 	 * - 文件内容 = front matter（只有新生成的 palace-id）+ body；body 为空时用 "# 文件名\n\n"（文件名不含 .md）
 	 * - 原子写，写完更新索引，返回新笔记的 NoteSummary
 	 */
-	public synchronized NoteSummary createNote(String relativePath, String body) throws IOException {
-		return createNote(relativePath, body, null);
-	}
-
-	/** 同上；owner 不为 null 时在 front matter 里写上 palace-owner（作者）。 */
-	public synchronized NoteSummary createNote(String relativePath, String body, UUID owner) throws IOException {
-		if (relativePath == null || relativePath.isEmpty()) {
-			throw new IllegalArgumentException("笔记路径不能为空");
+	/** 命令里输入的相对路径：不能为空、不能是绝对路径，每一段不能为空、不能以点开头、不能有 Windows 不允许的字符。 */
+	private static String checkedRelative(String relativePath) {
+		if (relativePath == null || relativePath.isBlank()) {
+			throw new IllegalArgumentException("路径不能为空");
 		}
-		String input = relativePath.replace('\\', '/');
+		String input = relativePath.strip().replace('\\', '/');
 		if (input.startsWith("/")) {
-			throw new IllegalArgumentException("笔记路径不能是绝对路径");
+			throw new IllegalArgumentException("路径不能是绝对路径");
 		}
 		for (String part : input.split("/", -1)) {
 			if (part.isEmpty()) {
@@ -496,29 +492,59 @@ public final class Vault {
 				throw new IllegalArgumentException("文件名或文件夹名含有 Windows 不允许的字符");
 			}
 		}
-		if (!isMarkdown(input)) {
-			input += ".md";
-		}
+		return input;
+	}
+
+	/** 笔记库里的这个相对路径（已经过 checkedRelative）；超出笔记库（含通过链接）→ IllegalArgumentException。 */
+	private Path resolveInside(String input) throws IOException {
 		Path file;
 		try {
 			Path path = root.getFileSystem().getPath(input);
 			if (path.isAbsolute() || path.getRoot() != null) {
-				throw new IllegalArgumentException("笔记路径不能是绝对路径");
+				throw new IllegalArgumentException("路径不能是绝对路径");
 			}
 			file = root.resolve(path).normalize();
 		} catch (InvalidPathException e) {
-			throw new IllegalArgumentException("笔记路径不合法", e);
+			throw new IllegalArgumentException("路径不合法", e);
 		}
 		if (!file.startsWith(root) || file.equals(root)) {
-			throw new IllegalArgumentException("笔记路径不能超出笔记库");
+			throw new IllegalArgumentException("路径不能超出笔记库");
 		}
 		Path ancestor = file.getParent();
 		while (!Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
 			ancestor = ancestor.getParent();
 		}
 		if (!ancestor.toRealPath().startsWith(root.toRealPath())) {
-			throw new IllegalArgumentException("笔记路径不能通过链接超出笔记库");
+			throw new IllegalArgumentException("路径不能通过链接超出笔记库");
 		}
+		return file;
+	}
+
+	/**
+	 * 新建一个空文件夹（可以多层，已有的上层不动），返回它相对笔记库的路径。名字的规则和新建笔记一样；
+	 * 已经存在 → IllegalArgumentException。
+	 */
+	public synchronized String createFolder(String relativePath) throws IOException {
+		String input = relativePath == null ? null : relativePath.strip().replaceAll("[/\\\\]+$", "");
+		Path dir = resolveInside(checkedRelative(input));
+		if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+			throw new IllegalArgumentException("已经有同名的文件夹或文件");
+		}
+		Files.createDirectories(dir);
+		return root.relativize(dir).toString().replace('\\', '/');
+	}
+
+	public synchronized NoteSummary createNote(String relativePath, String body) throws IOException {
+		return createNote(relativePath, body, null);
+	}
+
+	/** 同上；owner 不为 null 时在 front matter 里写上 palace-owner（作者）。 */
+	public synchronized NoteSummary createNote(String relativePath, String body, UUID owner) throws IOException {
+		String input = checkedRelative(relativePath);
+		if (!isMarkdown(input)) {
+			input += ".md";
+		}
+		Path file = resolveInside(input);
 		if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
 			throw new IllegalArgumentException("笔记已存在");
 		}
@@ -543,6 +569,63 @@ public final class Vault {
 		}
 		scan();
 		return find(id).orElseThrow(() -> new IOException("新笔记未能加入索引"));
+	}
+
+	/**
+	 * 给笔记改名（只改文件名，留在原来的文件夹里；不带 .md 时自动补上）。笔记 ID 不变，
+	 * 所以书架上的书、历史版本、加密都不受影响。新名字不合法、和别的文件重名 → IllegalArgumentException。
+	 */
+	public synchronized NoteSummary renameNote(UUID id, String newName) throws IOException {
+		NoteSummary note = find(id).orElseThrow(() -> new IllegalArgumentException("笔记不存在"));
+		String name = checkedRelative(newName);
+		if (name.contains("/")) {
+			throw new IllegalArgumentException("新名字里不能有斜杠（改名不移动文件夹）");
+		}
+		if (!isMarkdown(name)) {
+			name += ".md";
+		}
+		Path source = root.resolve(note.relativePath());
+		Path target = source.resolveSibling(name);
+		if (target.getFileName().toString().equals(source.getFileName().toString())) {
+			return note;
+		}
+		if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+			if (!Files.isSameFile(source, target)) {
+				throw new IllegalArgumentException("这个文件夹里已经有同名的笔记");
+			}
+			// 只改大小写（Windows 上是同一个文件）：先挪到临时名字再改回来
+			Path temporary = source.resolveSibling(".palace-rename-" + UUID.randomUUID() + ".tmp");
+			Files.move(source, temporary);
+			source = temporary;
+		}
+		Files.move(source, target);
+		scan();
+		return find(id).orElseThrow(() -> new IOException("改名后的笔记未能加入索引"));
+	}
+
+	/**
+	 * 把一篇笔记或一个文件夹（连同里面的东西）移进回收站 .palace/trash/&lt;UTC 时间&gt;/&lt;原来的路径&gt;，
+	 * 不真的删掉：想找回就从那里挪回来。返回它在回收站里的路径（相对笔记库）。
+	 * 路径不合法、不存在、是笔记库本身 → IllegalArgumentException。
+	 */
+	public synchronized String moveToTrash(String relativePath, java.time.Instant now) throws IOException {
+		String input = checkedRelative(relativePath == null ? null : relativePath.strip().replaceAll("[/\\\\]+$", ""));
+		Path source = resolveInside(input);
+		if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
+			throw new IllegalArgumentException("找不到这篇笔记或这个文件夹");
+		}
+		String stamp = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss.SSS'Z'", java.util.Locale.ROOT)
+				.withZone(java.time.ZoneOffset.UTC).format(now);
+		Path bin = root.resolve(".palace").resolve("trash").resolve(stamp);
+		Path target = bin.resolve(root.relativize(source));
+		for (int n = 2; Files.exists(bin); n++) {
+			bin = root.resolve(".palace").resolve("trash").resolve(stamp + "_" + n);
+			target = bin.resolve(root.relativize(source));
+		}
+		Files.createDirectories(target.getParent());
+		Files.move(source, target);
+		scan();
+		return root.relativize(target).toString().replace('\\', '/');
 	}
 
 	/**

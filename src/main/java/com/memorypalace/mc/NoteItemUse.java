@@ -71,6 +71,48 @@ final class NoteItemUse {
 		PalaceCommands.openCreated(player, created.get(), secret);
 	}
 
+	// 每这么多刻看一眼背包里有没有刚合成的抄本
+	private static final int AUTO_COPY_EVERY_TICKS = 10;
+	private static int autoCopyTicks;
+
+	/** 每刻调用（NoteRecipes.register 里注册）：把背包里刚合成的抄本自动抄好。 */
+	static void tick(net.minecraft.server.MinecraftServer server) {
+		if (++autoCopyTicks % AUTO_COPY_EVERY_TICKS != 0) {
+			return;
+		}
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			var inventory = player.getInventory();
+			for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+				ItemStack stack = inventory.getItem(slot);
+				if (NoteItems.autoCopy(stack)) {
+					autoCopy(player, stack);
+				}
+			}
+		}
+	}
+
+	/**
+	 * 合成抄本后不用再右键：普通笔记抄进普通文件夹，服务端自己就能抄完，直接换成新笔记的笔记书。
+	 * 加密笔记（要客户端解开再用新 ID 加密）、抄进上锁的文件夹（要文件夹密码）不自动做，免得在合成界面里突然弹密码框；
+	 * 这些和抄失败的（没权限、篇数满了……）都去掉自动标记、提示一次，留着右键抄。一叠有好几本时每次抄一本。
+	 */
+	private static void autoCopy(ServerPlayer player, ItemStack stack) {
+		UUID sourceId = NoteItems.copyOf(stack).orElseThrow();
+		Vault vault = PalaceServer.vault();
+		boolean plain = vault != null && vault.find(sourceId).filter(n -> !n.encrypted()).isPresent()
+				&& !targetLocked(vault, player) && NoteItems.copyJob(stack).isEmpty();
+		if (!plain) {
+			NoteItems.clearAutoCopy(stack);
+			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_right_click"));
+			return;
+		}
+		int before = stack.getCount();
+		copy(player, stack, sourceId);
+		if (stack.getCount() == before) {
+			NoteItems.clearAutoCopy(stack); // 没抄成（原因 copy 已经说了）：留着右键再试
+		}
+	}
+
 	/** 这本空白笔记用掉一本（创造模式不用掉），换成新笔记的笔记书。 */
 	private static void replace(ServerPlayer player, ItemStack stack, NoteSummary note) {
 		stack.consume(1, player);

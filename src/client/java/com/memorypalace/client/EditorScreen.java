@@ -3,6 +3,8 @@ package com.memorypalace.client;
 import com.memorypalace.client.book.BookLayout;
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
+import com.memorypalace.client.book.BookSettings;
+import com.memorypalace.client.book.BookSettings;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.NoteSaver;
 import com.memorypalace.client.crypto.NoteSealers;
@@ -51,6 +53,11 @@ public class EditorScreen extends BookScreen {
 
 	private boolean saving;
 	private Component status = Component.empty();
+	// status 是针对哪份正文说的：正文还是这样就照常显示（保存失败、冲突的提示不被"未保存"盖住），改了字就显示"未保存"
+	private String statusFor;
+	// 自动保存（见 BookSettings.AutoSave）：从上次保存（或打开编辑器）算起，到时间且有没保存的修改就存一次
+	private long lastSaveAt = System.currentTimeMillis();
+	private boolean autoSaving;
 
 	// 撤销 / 重做历史；重新 init（改窗口大小）时不丢
 	private final UndoHistory history;
@@ -83,6 +90,7 @@ public class EditorScreen extends BookScreen {
 		try {
 			this.text = NoteSealers.open(noteId, draft);
 			this.status = Component.translatable("screen.memorypalace.draft_restored");
+			this.statusFor = this.text;
 		} catch (WrongKeyException e) {
 			// 草稿解不开就算了，文件里的内容还在
 		}
@@ -163,6 +171,7 @@ public class EditorScreen extends BookScreen {
 		if (saving) {
 			return;
 		}
+		autoSaving = false;
 		if (encrypted && !NoteSealers.available(noteId)) {
 			if (folderNote) {
 				// 文件夹笔记的内容钥匙上锁时已经清零：没法在这里补输文件夹密码，草稿已暂存，重新打开这篇即可恢复
@@ -183,6 +192,7 @@ public class EditorScreen extends BookScreen {
 
 	private void send(String body, String stored, boolean force) {
 		saving = true;
+		lastSaveAt = System.currentTimeMillis();
 		status = Component.translatable("screen.memorypalace.saving");
 		NoteSaver.save(noteId, stored, force ? null : baseHash, result -> {
 			if ("OK".equals(result.result()) && encrypted) {
@@ -190,6 +200,26 @@ public class EditorScreen extends BookScreen {
 			}
 			onSaveResult(result, body);
 		});
+	}
+
+	/**
+	 * 每刻检查要不要自动保存：设置里开着、有没保存的修改、离上次保存够久了、手停了 2 秒（不在打字中途存）。
+	 * 加密笔记的钥匙已经清零（自动上锁了）就不存，也不弹解锁框——草稿上锁时已经暂存了。
+	 * 自动保存不覆盖外部的修改：冲突时只提示，不弹框打断。
+	 */
+	@Override
+	public void tick() {
+		super.tick();
+		int minutes = BookSettings.autoSave().minutes;
+		long now = System.currentTimeMillis();
+		if (minutes <= 0 || saving || !dirty() || now - lastSaveAt < minutes * 60_000L || now - lastEdit < 2_000
+				|| encrypted && !NoteSealers.available(noteId)) {
+			return;
+		}
+		String body = text;
+		String stored = encrypted ? NoteSealers.seal(noteId, body) : body;
+		autoSaving = true;
+		send(body, stored, false);
 	}
 
 	/**
@@ -210,11 +240,19 @@ public class EditorScreen extends BookScreen {
 
 	private void onSaveResult(EditPayloads.SaveResult result, String body) {
 		saving = false;
+		boolean auto = autoSaving;
+		autoSaving = false;
+		statusFor = text;
+		if (auto && "CONFLICT".equals(result.result())) {
+			status = Component.translatable("screen.memorypalace.autosave_conflict");
+			return;
+		}
 		switch (result.result()) {
 			case "OK" -> {
 				savedBody = body;
 				baseHash = result.newHash();
-				status = Component.translatable("screen.memorypalace.saved");
+				statusFor = body; // 保存途中又打了字：显示"未保存"
+				status = Component.translatable(auto ? "screen.memorypalace.autosaved" : "screen.memorypalace.saved");
 				// 保存的就是暂存的那份（或更新的）：草稿不需要了
 				if (body.equals(text)) {
 					ClientKeys.dropDraft(noteId);
@@ -369,7 +407,7 @@ public class EditorScreen extends BookScreen {
 		}
 		int indicatorY = top + INDICATOR_Y;
 		// 左页顶部：编辑状态；右页顶部：预览页码
-		Component state = dirty() && !saving ? Component.translatable("screen.memorypalace.unsaved") : status;
+		Component state = dirty() && !saving && !text.equals(statusFor) ? Component.translatable("screen.memorypalace.unsaved") : status;
 		Component left = Component.translatable(encrypted ? "screen.memorypalace.editing_secret" : "screen.memorypalace.editing")
 				.append(state);
 		graphics.text(this.font, left, leftTextX(), indicatorY, BookLayout.MUTED, false);

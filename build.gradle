@@ -43,6 +43,10 @@ dependencies {
 	implementation "me.lucko:fabric-permissions-api:${project.fabric_permissions_api_version}"
 	include "me.lucko:fabric-permissions-api:${project.fabric_permissions_api_version}"
 
+	// 历史版本按行存差异（Myers 算法，和 git diff 同一种；Apache 2.0，无依赖，约 70KB）
+	implementation "io.github.java-diff-utils:java-diff-utils:${project.java_diff_utils_version}"
+	include "io.github.java-diff-utils:java-diff-utils:${project.java_diff_utils_version}"
+
 	// 服务端配置文件 config/memorypalace-server.toml（带注释、默认值、校验；NeoForge 的配置系统也用它）
 	for (String lib : ["core", "toml"]) {
 		implementation "com.electronwill.night-config:${lib}:${project.night_config_version}"

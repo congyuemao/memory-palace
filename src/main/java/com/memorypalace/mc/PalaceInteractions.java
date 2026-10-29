@@ -72,6 +72,9 @@ public final class PalaceInteractions {
 							: NoteItems.isBlankLocked(stack) ? ItemUse.LOCKED_BLANK : ItemUse.PLAIN_BLANK, source.orElse(null));
 				} else if (player instanceof ServerPlayer serverPlayer && PalaceAccess.enabled(serverPlayer)) {
 					NoteItemUse.useBlank(serverPlayer, stack);
+					// 必须告诉原版手上现在是什么：不说的话 ItemStack.use 会把手上设回原来那叠（用掉最后一本后是空的），
+					// 新笔记书正好放进了手上这一格（前面的格子都满了）就被清掉
+					return InteractionResult.SUCCESS.heldItemTransformedTo(player.getItemInHand(hand));
 				} else if (player instanceof ServerPlayer serverPlayer) {
 					serverPlayer.sendSystemMessage(Component.translatable("message.memorypalace.multiplayer_off"));
 				}
