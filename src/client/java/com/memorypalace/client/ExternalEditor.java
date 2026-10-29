@@ -25,6 +25,28 @@ final class ExternalEditor {
 		} else {
 			pb = new ProcessBuilder("xdg-open", path);
 		}
+		start(pb, path);
+	}
+
+	/** 在资源管理器（访达、文件管理器）里显示：是文件就打开所在文件夹并选中它，是文件夹就打开它。 */
+	static void reveal(Path target) {
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		Path abs = target.toAbsolutePath();
+		boolean file = java.nio.file.Files.isRegularFile(abs);
+		String path = abs.toString();
+		ProcessBuilder pb;
+		if (os.contains("win")) {
+			pb = file ? new ProcessBuilder("explorer.exe", "/select," + path) : new ProcessBuilder("explorer.exe", path);
+		} else if (os.contains("mac")) {
+			pb = file ? new ProcessBuilder("open", "-R", path) : new ProcessBuilder("open", path);
+		} else {
+			// xdg-open 没有"选中文件"，打开所在文件夹
+			pb = new ProcessBuilder("xdg-open", (file ? abs.getParent() : abs).toString());
+		}
+		start(pb, path);
+	}
+
+	private static void start(ProcessBuilder pb, String path) {
 		// 在后台线程启动，别卡住游戏画面
 		Thread.ofVirtual().start(() -> {
 			try {

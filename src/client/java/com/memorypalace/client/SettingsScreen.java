@@ -7,8 +7,11 @@ import com.memorypalace.client.crypto.PasswordScreen;
 import com.memorypalace.client.crypto.RecoveryKeyScreen;
 import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.KeyRing;
+import com.memorypalace.core.vault.Vault;
+import com.memorypalace.mc.PalaceServer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
@@ -24,8 +27,8 @@ public class SettingsScreen extends Screen {
 	private static final int COLUMN = 150;
 	private static final int GAP = 10;
 	private static final int ROW = 24;
-	private static final int ROWS = 5;
-	// 标题 + 栏目名 + 5 行按钮 + "完成" + 提示信息 的总高度
+	private static final int ROWS = 6;
+	// 标题 + 栏目名 + 6 行按钮 + "完成" + 提示信息 的总高度
 	private static final int CONTENT_HEIGHT = 16 + 14 + ROWS * ROW + 20 + 20 + 16;
 
 	private final Screen parent;
@@ -67,6 +70,14 @@ public class SettingsScreen extends Screen {
 			BookSettings.setAutoSave(BookSettings.next(BookSettings.autoSave()));
 			b.setMessage(autoSaveLabel());
 		}).bounds(left, y + 4 * ROW, COLUMN, 20).build());
+		// 在资源管理器里打开当前世界的笔记库：只有单人游戏、自己开的局域网才在本机硬盘上
+		Vault vault = this.minecraft.hasSingleplayerServer() ? PalaceServer.vault() : null;
+		Button reveal = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.open_folder"),
+				b -> ExternalEditor.reveal(vault.root()))
+				.bounds(left, y + 5 * ROW, COLUMN, 20)
+				.tooltip(Tooltip.create(Component.translatable(vault != null
+						? "settings.memorypalace.open_folder_tooltip" : "settings.memorypalace.open_folder_unavailable"))).build());
+		reveal.active = vault != null;
 
 		// 密码相关：都要先输入当前密码证明是本人。钥匙圈存在当前世界（服务器）上，每人一个，所以要在世界里才能用
 		boolean inWorld = this.minecraft.player != null;
