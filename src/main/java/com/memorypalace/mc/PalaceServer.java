@@ -30,12 +30,15 @@ import java.util.concurrent.TimeUnit;
 public final class PalaceServer {
 	public static final String VAULT_DIR = "memory-palace";
 	private static final String BACKUP_DIR = "memory-palace-backups";
-	private static final int KEEP_BACKUPS = 10;
+	// 增量备份：没改过的内容只存一份，多留几份也不怎么占地方
+	private static final int KEEP_BACKUPS = 30;
 
 	private static volatile Vault vault;
 	private static volatile NoteLocations locations;
 	private static volatile CopyJobs copyJobs;
 	private static volatile MinecraftServer server;
+	// 备份放在 .minecraft/memory-palace-backups/<世界文件夹名>/
+	private static volatile Path backupDir;
 	// 世界设置的笔记可见性；null = 这个世界没设置过，用配置文件里的默认值
 	private static volatile NoteAccess.Visibility worldVisibility;
 	// 每 2 秒在后台看一眼哪些笔记文件在外部被改过，按文件刷新权限（见 Vault.refreshChanged）
@@ -61,7 +64,8 @@ public final class PalaceServer {
 				copyJobs = new CopyJobs(root.resolve(".palace").resolve("copy-jobs.tsv"));
 				MemoryPalace.LOGGER.info("笔记库已打开：{}（{} 篇笔记）", v.root(), v.list().size());
 				startRefresher(v);
-				backupInBackground(root, worldDir.getFileName().toString());
+				backupDir = FabricLoader.getInstance().getGameDir().resolve(BACKUP_DIR).resolve(worldDir.getFileName().toString());
+				backupInBackground(root, backupDir, ok -> {});
 			} catch (IOException e) {
 				MemoryPalace.LOGGER.error("无法打开笔记库 {}", root, e);
 			}
@@ -76,6 +80,7 @@ public final class PalaceServer {
 			locations = null;
 			copyJobs = null;
 			worldVisibility = null;
+			backupDir = null;
 			PalaceServer.server = null;
 		});
 	}
@@ -198,22 +203,79 @@ public final class PalaceServer {
 		return locations;
 	}
 
+	/** 当前世界的备份文件夹；世界没开时为 null。 */
+	public static Path backupDir() {
+		return backupDir;
+	}
+
 	/**
 	 * 每次进世界把笔记库备份到 .minecraft/memory-palace-backups/&lt;世界文件夹名&gt;/，
 	 * 放在存档外面，删世界也不会丢。没改过就不重复备份。在后台线程做，不卡进世界。
+	 * done(true) = 备份成功（包括内容没变、不用备份）。
 	 */
-	private static void backupInBackground(Path vaultRoot, String worldFolder) {
-		Path backupDir = FabricLoader.getInstance().getGameDir().resolve(BACKUP_DIR).resolve(worldFolder);
-		Thread.ofVirtual().name("memorypalace-backup").start(() -> {
+	private static void backupInBackground(Path vaultRoot, Path dir, java.util.function.Consumer<Boolean> done) {
+		Thread.ofVirtual().name("memorypalace-backup").start(() -> done.accept(backupNow(vaultRoot, dir)));
+	}
+
+	private static boolean backupNow(Path vaultRoot, Path dir) {
+		try {
+			VaultBackup.backup(vaultRoot, dir, KEEP_BACKUPS, Clock.systemDefaultZone())
+					.ifPresentOrElse(
+							zip -> MemoryPalace.LOGGER.info("笔记库备份已保存：{}", zip),
+							() -> MemoryPalace.LOGGER.debug("笔记库内容未变化或首次备份时为空，未生成新备份"));
+			return true;
+		} catch (VaultBackup.IncompleteBackupException e) {
+			MemoryPalace.LOGGER.error("笔记库未能完整读取，本次备份已放弃，已有备份未清理", e);
+		} catch (IOException | RuntimeException e) {
+			MemoryPalace.LOGGER.error("笔记库备份失败", e);
+		}
+		return false;
+	}
+
+	/** 设置里的"立即备份"：在后台备份一次，done 在后台线程调用（true = 成功或内容没变）。 */
+	public static void backupNow(java.util.function.Consumer<Boolean> done) {
+		Vault v = vault;
+		Path dir = backupDir;
+		if (v == null || dir == null) {
+			done.accept(false);
+			return;
+		}
+		backupInBackground(v.root(), dir, done);
+	}
+
+	/**
+	 * 把笔记库恢复成某一次备份（只在本机房主的设置里用）。在服务端线程上做，期间没有别的保存插进来：
+	 * 先备份一次当前内容（失败就不恢复），再恢复，然后重新扫描笔记库。done 在服务端线程调用。
+	 */
+	public static void restoreBackup(String snapshotId, java.util.function.Consumer<VaultBackup.RestoredInPlace> done,
+			java.util.function.Consumer<String> failed) {
+		MinecraftServer s = server;
+		Vault v = vault;
+		Path dir = backupDir;
+		if (s == null || v == null || dir == null) {
+			failed.accept("no vault");
+			return;
+		}
+		s.execute(() -> {
+			if (!backupNow(v.root(), dir)) {
+				failed.accept("backup failed");
+				return;
+			}
 			try {
-				VaultBackup.backup(vaultRoot, backupDir, KEEP_BACKUPS, Clock.systemDefaultZone())
-						.ifPresentOrElse(
-								zip -> MemoryPalace.LOGGER.info("笔记库完整备份已保存：{}", zip),
-								() -> MemoryPalace.LOGGER.debug("笔记库内容未变化或首次备份时为空，未生成新备份"));
-			} catch (VaultBackup.IncompleteBackupException e) {
-				MemoryPalace.LOGGER.error("笔记库未能完整读取，本次备份已放弃，已有备份未清理", e);
+				String stamp = "恢复备份前-" + java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss'Z'")
+						.format(java.time.Instant.now().atZone(java.time.ZoneOffset.UTC));
+				VaultBackup.RestoredInPlace result = VaultBackup.restoreInto(dir, snapshotId, v.root(), stamp);
+				v.scan();
+				Path root = v.root();
+				worldVisibility = loadVisibility(root);
+				locations = new NoteLocations(root.resolve(".palace").resolve("locations.tsv"));
+				copyJobs = new CopyJobs(root.resolve(".palace").resolve("copy-jobs.tsv"));
+				MemoryPalace.LOGGER.info("笔记库已恢复到备份 {}：写回 {} 个文件，{} 个文件移到了 {}", snapshotId,
+						result.written(), result.movedToTrash(), result.trash());
+				done.accept(result);
 			} catch (IOException | RuntimeException e) {
-				MemoryPalace.LOGGER.error("笔记库备份失败", e);
+				MemoryPalace.LOGGER.error("恢复备份失败", e);
+				failed.accept(e.getMessage());
 			}
 		});
 	}

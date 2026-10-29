@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
-import java.util.zip.ZipFile;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.*;
@@ -58,18 +57,42 @@ class VaultBackupTest {
 		return p;
 	}
 
-	private List<String> zipEntries(Path zip) throws IOException {
-		try (ZipFile z = new ZipFile(zip.toFile(), StandardCharsets.UTF_8)) {
-			List<String> names = new ArrayList<>();
-			z.stream().filter(e -> !e.isDirectory()).forEach(e -> names.add(e.getName()));
-			names.sort(null);
-			return names;
+	private int restores;
+
+	/** 把这次备份恢复到一个新文件夹，读出全部文件（相对路径 → 内容）。 */
+	private Map<String, String> restored(Path manifest) throws IOException {
+		String name = manifest.getFileName().toString();
+		Path target = dir.resolve("restored-" + restores++);
+		VaultBackup.Restored result = VaultBackup.restore(backups(), name.substring(0, name.length() - 4), target);
+		assertEquals(List.of(), result.broken());
+		Map<String, String> files = new java.util.TreeMap<>();
+		try (Stream<Path> s = Files.walk(target)) {
+			for (Path f : s.filter(Files::isRegularFile).toList()) {
+				files.put(target.relativize(f).toString().replace('\\', '/'), Files.readString(f, StandardCharsets.UTF_8));
+			}
+		}
+		return files;
+	}
+
+	private List<String> zipEntries(Path manifest) throws IOException {
+		return new ArrayList<>(restored(manifest).keySet());
+	}
+
+	/** snapshots 文件夹里的清单名（不含临时文件就说明没有留下半成品）。 */
+	private List<String> backupNames() throws IOException {
+		Path snapshots = backups().resolve("snapshots");
+		if (!Files.isDirectory(snapshots)) {
+			return List.of();
+		}
+		try (Stream<Path> s = Files.list(snapshots)) {
+			return s.map(p -> p.getFileName().toString()).sorted().toList();
 		}
 	}
 
-	private List<String> backupNames() throws IOException {
-		try (Stream<Path> s = Files.list(backups())) {
-			return s.map(p -> p.getFileName().toString()).sorted().toList();
+	/** objects 里存了几份内容。 */
+	private long objectCount() throws IOException {
+		try (Stream<Path> s = Files.walk(backups().resolve("objects"))) {
+			return s.filter(Files::isRegularFile).filter(f -> f.toString().endsWith(".gz")).count();
 		}
 	}
 
@@ -83,10 +106,10 @@ class VaultBackupTest {
 
 		Optional<Path> zip = VaultBackup.backup(vault(), backups(), 10, at(T0));
 		assertTrue(zip.isPresent());
-		assertEquals("2026-10-27T03-04-05Z.zip", zip.get().getFileName().toString());
+		assertEquals("2026-10-27T03-04-05Z.txt", zip.get().getFileName().toString());
 		assertEquals(List.of(".palace/locations.tsv", "欢迎.md", "线代/特征值.md"), zipEntries(zip.get()));
 		// 没有留下临时文件
-		assertEquals(List.of("2026-10-27T03-04-05Z.zip"), backupNames());
+		assertEquals(List.of("2026-10-27T03-04-05Z.txt"), backupNames());
 	}
 
 	@Test
@@ -103,14 +126,10 @@ class VaultBackupTest {
 		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).isPresent());
 	}
 
-	private String zipText(Path zip, String entry) throws IOException {
-		try (ZipFile z = new ZipFile(zip.toFile(), StandardCharsets.UTF_8)) {
-			var e = z.getEntry(entry);
-			assertNotNull(e, "ZIP 里应有 " + entry);
-			try (var in = z.getInputStream(e)) {
-				return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-			}
-		}
+	private String zipText(Path manifest, String entry) throws IOException {
+		String text = restored(manifest).get(entry);
+		assertNotNull(text, "备份里应有 " + entry);
+		return text;
 	}
 
 	// 下面几种变化都不会让任何文件的修改时间晚于上次备份（迁入的旧笔记、改名、删除、改完还原时间），
@@ -163,7 +182,7 @@ class VaultBackupTest {
 		// 内容没再变：不重复备份，哪怕修改时间被碰到了未来
 		Files.setLastModifiedTime(vault().resolve("a.md"), FileTime.from(Instant.now().plusSeconds(3600)));
 		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(180))).isEmpty());
-		assertEquals(List.of("2026-10-27T03-04-05Z.zip", "2026-10-27T03-05-05Z.zip", "2026-10-27T03-06-05Z.zip"), backupNames());
+		assertEquals(List.of("2026-10-27T03-04-05Z.txt", "2026-10-27T03-05-05Z.txt", "2026-10-27T03-06-05Z.txt"), backupNames());
 	}
 
 	@Test
@@ -172,23 +191,26 @@ class VaultBackupTest {
 		VaultBackup.backup(vault(), backups(), 10, at(T0));
 		write("a.md", "A2", Instant.now().plusSeconds(3600));
 		Optional<Path> second = VaultBackup.backup(vault(), backups(), 10, at(T0));
-		assertEquals("2026-10-27T03-04-05Z_2.zip", second.orElseThrow().getFileName().toString());
+		assertEquals("2026-10-27T03-04-05Z_2.txt", second.orElseThrow().getFileName().toString());
 	}
 
 	@Test
 	void keepsOnlyNewestAndLeavesOtherFilesAlone() throws IOException {
 		Files.createDirectories(backups());
 		Files.writeString(backups().resolve("说明.txt"), "别删我");
+		Files.writeString(backups().resolve("2026-10-01T00-00-00Z.zip"), "以前版本的 ZIP 备份");
 		for (int i = 0; i < 5; i++) {
 			// 每次都让文件"比上一次备份新"
 			write("a.md", "v" + i, Instant.now().plusSeconds(3600L * (i + 1)));
 			assertTrue(VaultBackup.backup(vault(), backups(), 3, at(T0.plusSeconds(i))).isPresent());
 		}
 		assertEquals(List.of(
-				"2026-10-27T03-04-07Z.zip",
-				"2026-10-27T03-04-08Z.zip",
-				"2026-10-27T03-04-09Z.zip",
-				"说明.txt"), backupNames());
+				"2026-10-27T03-04-07Z.txt",
+				"2026-10-27T03-04-08Z.txt",
+				"2026-10-27T03-04-09Z.txt"), backupNames());
+		assertTrue(Files.exists(backups().resolve("说明.txt")), "别的文件不动");
+		assertTrue(Files.exists(backups().resolve("2026-10-01T00-00-00Z.zip")), "以前的 ZIP 备份不动");
+		assertEquals(3, objectCount(), "淘汰掉的备份用到的内容也删掉了");
 	}
 
 	@Test
@@ -205,7 +227,7 @@ class VaultBackupTest {
 		Path newest = VaultBackup.backup(vault(), backups(), 2, Clock.fixed(T0.plusSeconds(120), shanghai)).orElseThrow();
 
 		assertTrue(Files.exists(newest), "最新的备份必须留下");
-		assertEquals(List.of("2026-10-27T03-05-05Z.zip", "2026-10-27T03-06-05Z.zip"), backupNames());
+		assertEquals(List.of("2026-10-27T03-05-05Z.txt", "2026-10-27T03-06-05Z.txt"), backupNames());
 	}
 
 	@FunctionalInterface
@@ -283,6 +305,7 @@ class VaultBackupTest {
 		Path first = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
 		byte[] original = Files.readAllBytes(first);
 		write("a.md", "虚构笔记 B", OLD);
+		Files.writeString(vault().resolve("先读到的.md"), "虚构");
 
 		withReadDenied(lock, () -> {
 			assertSourceFailure(lock, T0.plusSeconds(60));
@@ -291,7 +314,7 @@ class VaultBackupTest {
 		});
 
 		Path recovered = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).orElseThrow();
-		assertEquals(List.of(".palace-lock", "a.md"), zipEntries(recovered));
+		assertEquals(List.of(".palace-lock", "a.md", "先读到的.md"), zipEntries(recovered));
 		assertEquals("虚构锁文件", zipText(recovered, ".palace-lock"));
 		assertEquals("虚构笔记 B", zipText(recovered, "a.md"));
 		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(180))).isEmpty());
@@ -389,5 +412,139 @@ class VaultBackupTest {
 		assertEquals(List.of("a.md"), zipEntries(first));
 		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).isEmpty());
 		assertEquals(List.of(first.getFileName().toString(), empty.getFileName().toString()), backupNames());
+	}
+
+	@Test
+	void unchangedFilesAreStoredOnlyOnce() throws IOException {
+		write("大文件.md", "x".repeat(100_000), OLD);
+		write("a.md", "A", OLD);
+		VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		assertEquals(2, objectCount());
+		for (int i = 1; i <= 5; i++) {
+			write("a.md", "A" + i, OLD);
+			VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60L * i))).orElseThrow();
+		}
+		assertEquals(7, objectCount(), "大文件没改过：6 次备份只存了一份");
+		// 改名、复制：内容一样，不再多存
+		Files.copy(vault().resolve("大文件.md"), vault().resolve("副本.md"));
+		Path copied = VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(600))).orElseThrow();
+		assertEquals(7, objectCount());
+		assertEquals("x".repeat(100_000), zipText(copied, "副本.md"));
+	}
+
+	@Test
+	void everyKeptBackupStillRestoresItsOwnVersion() throws IOException {
+		List<Path> manifests = new ArrayList<>();
+		for (int i = 0; i < 4; i++) {
+			write("a.md", "版本 " + i, OLD);
+			manifests.add(VaultBackup.backup(vault(), backups(), 3, at(T0.plusSeconds(i))).orElseThrow());
+		}
+		assertFalse(Files.exists(manifests.get(0)), "只留最新 3 份");
+		for (int i = 1; i < 4; i++) {
+			assertEquals("版本 " + i, zipText(manifests.get(i), "a.md"));
+		}
+		assertEquals(3, objectCount());
+	}
+
+	@Test
+	void restoreReportsDamagedContentAndNeverOverwrites() throws IOException {
+		write("好的.md", "完好", OLD);
+		write("坏的.md", "会被弄坏", OLD);
+		Path manifest = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		String id = manifest.getFileName().toString().replace(".txt", "");
+		// 把"坏的.md"那份内容换成别的（指纹对不上）
+		String hash = Files.readAllLines(manifest).stream().filter(l -> l.endsWith(" 坏的.md")).findFirst().orElseThrow().split(" ")[0];
+		Path object = backups().resolve("objects").resolve(hash.substring(0, 2)).resolve(hash + ".gz");
+		try (var out = new java.util.zip.GZIPOutputStream(Files.newOutputStream(object))) {
+			out.write("被改过的内容".getBytes(StandardCharsets.UTF_8));
+		}
+		Path target = dir.resolve("恢复");
+		VaultBackup.Restored result = VaultBackup.restore(backups(), id, target);
+		assertEquals(1, result.files());
+		assertEquals(List.of("坏的.md"), result.broken());
+		assertEquals("完好", Files.readString(target.resolve("好的.md")));
+		assertFalse(Files.exists(target.resolve("坏的.md")), "坏掉的不写出来");
+
+		assertThrows(IOException.class, () -> VaultBackup.restore(backups(), id, target), "目标已存在：不覆盖");
+		assertThrows(IOException.class, () -> VaultBackup.restore(backups(), "2000-01-01T00-00-00Z", dir.resolve("另一个")));
+	}
+
+	@Test
+	void restoreRefusesPathsOutsideTheTarget() throws IOException {
+		write("a.md", "A", OLD);
+		Path manifest = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		String line = Files.readAllLines(manifest).get(1);
+		String hash = line.split(" ")[0];
+		Files.writeString(manifest, "memory-palace-backup 1\n" + hash + " 1 ../跑出去.md\n" + line + "\n");
+		VaultBackup.Restored result = VaultBackup.restore(backups(), manifest.getFileName().toString().replace(".txt", ""), dir.resolve("恢复"));
+		assertEquals(List.of("../跑出去.md"), result.broken());
+		assertFalse(Files.exists(dir.resolve("跑出去.md")));
+		assertEquals(1, result.files());
+	}
+
+	@Test
+	void damagedManifestBlocksCleanupInsteadOfDeletingContent() throws IOException {
+		write("a.md", "A", OLD);
+		Path first = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		Files.writeString(first, "看不懂的内容");
+		write("a.md", "B", OLD);
+		VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		assertEquals(2, objectCount(), "读不出来的清单可能还用着 A：不删");
+	}
+
+	@Test
+	void latestZipAlwaysMatchesTheNewestBackup() throws IOException {
+		write("a.md", "第一版", OLD);
+		write("线代/b.md", "B", OLD);
+		VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		write("a.md", "第二版", OLD);
+		VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(60))).orElseThrow();
+		Path zip = backups().resolve(VaultBackup.LATEST_ZIP);
+		try (var z = new java.util.zip.ZipFile(zip.toFile(), StandardCharsets.UTF_8)) {
+			assertEquals(2, z.size());
+			try (var in = z.getInputStream(z.getEntry("a.md"))) {
+				assertEquals("第二版", new String(in.readAllBytes(), StandardCharsets.UTF_8));
+			}
+			assertNotNull(z.getEntry("线代/b.md"));
+		}
+		// ZIP 被删了：内容没变也补上
+		Files.delete(zip);
+		assertTrue(VaultBackup.backup(vault(), backups(), 10, at(T0.plusSeconds(120))).isEmpty());
+		assertTrue(Files.exists(zip));
+	}
+
+	@Test
+	void restoreIntoVaultMovesCurrentFilesToTrashAndWritesTheBackup() throws IOException {
+		write("a.md", "备份时的 A", OLD);
+		write("线代/b.md", "B", OLD);
+		Path manifest = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		String id = manifest.getFileName().toString().replace(".txt", "");
+		write("a.md", "后来改的 A", OLD);
+		write("后来新建.md", "新", OLD);
+		Files.delete(vault().resolve("线代/b.md"));
+		write(".palace/trash/旧回收站/x.md", "回收站里的", OLD);
+
+		VaultBackup.RestoredInPlace result = VaultBackup.restoreInto(backups(), id, vault(), "恢复前");
+		assertEquals(2, result.written(), "a.md 和 线代/b.md");
+		assertEquals(2, result.movedToTrash(), "后来改的 a.md 和后来新建的");
+		assertEquals("备份时的 A", Files.readString(vault().resolve("a.md")));
+		assertEquals("B", Files.readString(vault().resolve("线代/b.md")));
+		assertFalse(Files.exists(vault().resolve("后来新建.md")));
+		Path trash = vault().resolve(".palace/trash/恢复前");
+		assertEquals("后来改的 A", Files.readString(trash.resolve("a.md")));
+		assertEquals("新", Files.readString(trash.resolve("后来新建.md")));
+		assertEquals("回收站里的", Files.readString(vault().resolve(".palace/trash/旧回收站/x.md")), "回收站不动");
+	}
+
+	@Test
+	void restoreIntoVaultTouchesNothingWhenContentIsDamaged() throws IOException {
+		write("a.md", "A", OLD);
+		Path manifest = VaultBackup.backup(vault(), backups(), 10, at(T0)).orElseThrow();
+		String hash = Files.readAllLines(manifest).get(1).split(" ")[0];
+		Files.delete(backups().resolve("objects").resolve(hash.substring(0, 2)).resolve(hash + ".gz"));
+		write("a.md", "现在的 A", OLD);
+		assertThrows(IOException.class, () -> VaultBackup.restoreInto(backups(), manifest.getFileName().toString().replace(".txt", ""), vault(), "x"));
+		assertEquals("现在的 A", Files.readString(vault().resolve("a.md")));
+		assertFalse(Files.exists(vault().resolve(".palace/trash")));
 	}
 }

@@ -21,66 +21,104 @@ import net.minecraft.client.gui.screens.options.controls.KeyBindsScreen;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 /**
  * 记忆宫殿设置。从 Mod Menu（模组列表里的设置按钮）或"打开设置"快捷键进入。
- * 密码相关的按钮只有在世界里才能用，因为钥匙圈存在当前世界（服务器）的笔记库里，每人一个。
+ * 分三页：阅读与编辑、加密与解锁、笔记库与备份。
+ * 密码相关的按钮只有在世界里才能用，因为钥匙圈存在当前世界（服务器）的笔记库里，每人一个；
+ * 笔记库与备份只在单人游戏、自己开的局域网里能用（文件在本机硬盘上）。
  */
 public class SettingsScreen extends Screen {
-	private static final int COLUMN = 150;
+	private enum Tab { READING, SECURITY, VAULT }
+
+	private static final int WIDE = 210;   // 单栏按钮宽
+	private static final int COLUMN = 150; // 两栏时每栏宽
 	private static final int GAP = 10;
 	private static final int ROW = 24;
-	private static final int ROWS = 6;
-	// 标题 + 栏目名 + 6 行按钮 + "完成" + 提示信息 的总高度
-	private static final int CONTENT_HEIGHT = 16 + 14 + ROWS * ROW + 20 + 20 + 16;
+	private static final int TAB_WIDTH = 104;
+	// 标题 + 页签 + 4 行按钮 + 说明行 + 提示信息 + "完成" 的总高度
+	private static final int CONTENT_HEIGHT = 20 + 20 + 14 + 4 * ROW + 14 + 16 + 20;
+
+	// 记住上次看的是哪一页（这次打开游戏期间）
+	private static Tab tab = Tab.READING;
 
 	private final Screen parent;
 	private Component message = Component.empty();
-
-	/** 第一行按钮的 y：整块内容垂直居中，但至少离顶部留出标题的位置。 */
-	private int buttonsTop() {
-		return Math.max(32, (this.height - CONTENT_HEIGHT) / 2 + 30);
-	}
 
 	public SettingsScreen(Screen parent) {
 		super(Component.translatable("settings.memorypalace.title"));
 		this.parent = parent;
 	}
 
+	/** 页签那一行的 y：整块内容垂直居中，但至少离顶部留出标题的位置。 */
+	private int tabsTop() {
+		return Math.max(28, (this.height - CONTENT_HEIGHT) / 2 + 20);
+	}
+
+	private int contentTop() {
+		return tabsTop() + 20 + 14;
+	}
+
 	@Override
 	protected void init() {
-		// 两栏：左边"阅读"，右边"加密笔记密码"，整体按内容高度垂直居中（小窗口、大界面缩放也放得下）
-		int left = this.width / 2 - COLUMN - GAP / 2;
-		int right = this.width / 2 + GAP / 2;
-		int y = buttonsTop();
+		int x = this.width / 2 - (3 * TAB_WIDTH + 2 * 4) / 2;
+		for (Tab t : Tab.values()) {
+			Button button = addRenderableWidget(Button.builder(tabLabel(t), b -> {
+				tab = t;
+				message = Component.empty();
+				rebuildWidgets();
+			}).bounds(x, tabsTop(), TAB_WIDTH, 20).build());
+			button.active = t != tab; // 当前页的页签按下去
+			x += TAB_WIDTH + 4;
+		}
+		switch (tab) {
+			case READING -> initReading();
+			case SECURITY -> initSecurity();
+			case VAULT -> initVault();
+		}
+		addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
+				.bounds(this.width / 2 - WIDE / 2, contentTop() + 4 * ROW + 14 + 16, WIDE, 20).build());
+	}
+
+	private static Component tabLabel(Tab t) {
+		return Component.translatable(switch (t) {
+			case READING -> "settings.memorypalace.tab_reading";
+			case SECURITY -> "settings.memorypalace.tab_security";
+			case VAULT -> "settings.memorypalace.tab_vault";
+		});
+	}
+
+	// ---- 阅读与编辑 ----
+
+	private void initReading() {
+		int x = this.width / 2 - WIDE / 2;
+		int y = contentTop();
 		addRenderableWidget(Button.builder(pageSizeLabel(), b -> {
 			BookSettings.setPageSize(BookSettings.next(BookSettings.pageSize()));
 			b.setMessage(pageSizeLabel());
-		}).bounds(left, y, COLUMN, 20).build());
+		}).bounds(x, y, WIDE, 20).build());
 		addRenderableWidget(Button.builder(fontSizeLabel(), b -> {
 			BookSettings.setFontSize(BookSettings.next(BookSettings.fontSize()));
 			b.setMessage(fontSizeLabel());
-		}).bounds(left, y + ROW, COLUMN, 20).build());
-		addRenderableWidget(Button.builder(autoLockLabel(), b -> {
-			BookSettings.setAutoLock(BookSettings.next(BookSettings.autoLock()));
-			b.setMessage(autoLockLabel());
-		}).bounds(left, y + 2 * ROW, COLUMN, 20).build());
-		addRenderableWidget(Button.builder(inboxEncryptionLabel(), b -> {
-			BookSettings.setInboxEncryption(!BookSettings.inboxEncryption());
-			b.setMessage(inboxEncryptionLabel());
-		}).bounds(left, y + 3 * ROW, COLUMN, 20).build());
+		}).bounds(x, y + ROW, WIDE, 20).build());
 		addRenderableWidget(Button.builder(autoSaveLabel(), b -> {
 			BookSettings.setAutoSave(BookSettings.next(BookSettings.autoSave()));
 			b.setMessage(autoSaveLabel());
-		}).bounds(left, y + 4 * ROW, COLUMN, 20).build());
-		// 在资源管理器里打开当前世界的笔记库：只有单人游戏、自己开的局域网才在本机硬盘上
-		Vault vault = this.minecraft.hasSingleplayerServer() ? PalaceServer.vault() : null;
-		Button reveal = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.open_folder"),
-				b -> ExternalEditor.reveal(vault.root()))
-				.bounds(left, y + 5 * ROW, COLUMN, 20)
-				.tooltip(Tooltip.create(Component.translatable(vault != null
-						? "settings.memorypalace.open_folder_tooltip" : "settings.memorypalace.open_folder_unavailable"))).build());
-		reveal.active = vault != null;
+		}).bounds(x, y + 2 * ROW, WIDE, 20).build());
+		addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.edit_keys"),
+				b -> this.minecraft.gui.setScreen(new KeyBindsScreen(this, this.minecraft.options)))
+				.bounds(x, y + 3 * ROW, WIDE, 20).build());
+	}
 
+	// ---- 加密与解锁 ----
+
+	private void initSecurity() {
+		// 两栏：左边密码和恢复密钥，右边其他解锁方式和收件箱
+		int left = this.width / 2 - COLUMN - GAP / 2;
+		int right = this.width / 2 + GAP / 2;
+		int y = contentTop();
 		// 密码相关：都要先输入当前密码证明是本人。钥匙圈存在当前世界（服务器）上，每人一个，所以要在世界里才能用
 		boolean inWorld = this.minecraft.player != null;
 		Button change = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.change_password"),
@@ -88,7 +126,7 @@ public class SettingsScreen extends Screen {
 						Component.translatable("crypto.memorypalace.verify_change"), this,
 						(password, key) -> this.minecraft.gui.setScreen(
 								PasswordScreen.newPassword(keyring, key, this, () -> this.minecraft.gui.setScreen(this)))))))
-				.bounds(right, y, COLUMN, 20).build());
+				.bounds(left, y, COLUMN, 20).build());
 		Button regen = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.new_recovery"),
 				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_recovery"), this, (password, key) -> {
@@ -112,7 +150,7 @@ public class SettingsScreen extends Screen {
 								show("crypto.memorypalace.error");
 							}
 						}))))
-				.bounds(right, y + ROW, COLUMN, 20).build());
+				.bounds(left, y + ROW, COLUMN, 20).build());
 		Button remove = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.remove_recovery"),
 				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_remove_recovery"), this, (password, key) -> {
@@ -123,7 +161,7 @@ public class SettingsScreen extends Screen {
 								show("crypto.memorypalace.error");
 							}
 						}))))
-				.bounds(right, y + 2 * ROW, COLUMN, 20).build());
+				.bounds(left, y + 2 * ROW, COLUMN, 20).build());
 		// 忘记密码：用恢复密钥重置（原密码没有保存，无法找回）
 		Button forgot = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.forgot_password"),
 				b -> withKeyring(keyring -> {
@@ -133,29 +171,73 @@ public class SettingsScreen extends Screen {
 					}
 					this.minecraft.gui.setScreen(PasswordScreen.recover(keyring, this, () -> this.minecraft.gui.setScreen(this)));
 				}))
-				.bounds(right, y + 3 * ROW, COLUMN, 20).build());
-		// 信任新的收件箱公钥：并排显示记住的旧指纹和服务器上的新指纹，确认后才替换（只在别人的服务器上有用）
-		Button trust = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.trust_box"),
-				b -> withKeyring(this::confirmTrust))
-				.bounds(right, y + 4 * ROW, COLUMN, 20).build());
+				.bounds(left, y + 3 * ROW, COLUMN, 20).build());
+
 		// 实体钥匙（YubiKey 等）：只支持 Windows。没登记就登记一把，登记过就问要不要移除
 		boolean keySupported = SecurityKey.available();
 		Button token = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.token"),
 				b -> withKeyring(this::tokenClicked))
-				.bounds(right, y + 5 * ROW, COLUMN, 20)
+				.bounds(right, y, COLUMN, 20)
 				.tooltip(Tooltip.create(Component.translatable(keySupported
 						? "settings.memorypalace.token_tooltip" : "settings.memorypalace.token_unavailable"))).build());
+		addRenderableWidget(Button.builder(autoLockLabel(), b -> {
+			BookSettings.setAutoLock(BookSettings.next(BookSettings.autoLock()));
+			b.setMessage(autoLockLabel());
+		}).bounds(right, y + ROW, COLUMN, 20).build());
+		addRenderableWidget(Button.builder(inboxEncryptionLabel(), b -> {
+			BookSettings.setInboxEncryption(!BookSettings.inboxEncryption());
+			b.setMessage(inboxEncryptionLabel());
+		}).bounds(right, y + 2 * ROW, COLUMN, 20).build());
+		// 信任新的收件箱公钥：并排显示记住的旧指纹和服务器上的新指纹，确认后才替换（只在别人的服务器上有用）
+		Button trust = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.trust_box"),
+				b -> withKeyring(this::confirmTrust))
+				.bounds(right, y + 3 * ROW, COLUMN, 20).build());
 		change.active = regen.active = remove.active = forgot.active = inWorld;
 		trust.active = inWorld && !this.minecraft.hasSingleplayerServer();
 		token.active = inWorld && keySupported;
+	}
 
-		// 最下面一行：左边"修改按键"（打开原版按键设置页），右边"完成"
-		int bottom = y + ROWS * ROW + 20;
-		addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.edit_keys"),
-				b -> this.minecraft.gui.setScreen(new KeyBindsScreen(this, this.minecraft.options)))
-				.bounds(left, bottom, COLUMN, 20).build());
-		addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, b -> onClose())
-				.bounds(right, bottom, COLUMN, 20).build());
+	// ---- 笔记库与备份 ----
+
+	private void initVault() {
+		int x = this.width / 2 - WIDE / 2;
+		int y = contentTop();
+		// 笔记库和备份都在本机硬盘上：只有单人游戏、自己开的局域网才能用
+		Vault vault = this.minecraft.hasSingleplayerServer() ? PalaceServer.vault() : null;
+		Path backups = vault != null ? PalaceServer.backupDir() : null;
+		Component unavailable = Component.translatable("settings.memorypalace.local_only");
+		Button reveal = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.open_folder"),
+				b -> ExternalEditor.reveal(vault.root()))
+				.bounds(x, y, WIDE, 20)
+				.tooltip(Tooltip.create(vault != null ? Component.translatable("settings.memorypalace.open_folder_tooltip") : unavailable))
+				.build());
+		Button backupNow = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.backup_now"), b -> {
+			b.active = false;
+			show("settings.memorypalace.backup_running");
+			PalaceServer.backupNow(ok -> this.minecraft.execute(() -> {
+				b.active = true;
+				show(ok ? "settings.memorypalace.backup_done" : "settings.memorypalace.backup_failed");
+			}));
+		}).bounds(x, y + ROW, WIDE, 20)
+				.tooltip(Tooltip.create(backups != null ? Component.translatable("settings.memorypalace.backup_now_tooltip") : unavailable))
+				.build());
+		Button browse = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.backups"),
+				b -> this.minecraft.gui.setScreen(new BackupScreen(this)))
+				.bounds(x, y + 2 * ROW, WIDE, 20)
+				.tooltip(Tooltip.create(backups != null ? Component.translatable("settings.memorypalace.backups_tooltip") : unavailable))
+				.build());
+		Button openBackups = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.open_backups"), b -> {
+			try {
+				Files.createDirectories(backups);
+			} catch (java.io.IOException e) {
+				// 打不开就让文件管理器自己报错
+			}
+			ExternalEditor.reveal(backups);
+		}).bounds(x, y + 3 * ROW, WIDE, 20)
+				.tooltip(Tooltip.create(backups != null ? Component.translatable("settings.memorypalace.open_backups_tooltip") : unavailable))
+				.build());
+		reveal.active = vault != null;
+		backupNow.active = browse.active = openBackups.active = backups != null;
 	}
 
 	/** 按键一览：每个按键"名称 键位"，和别的按键冲突的标红。 */
@@ -327,16 +409,13 @@ public class SettingsScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		int y = buttonsTop();
-		graphics.centeredText(this.font, this.title, this.width / 2, y - 30, 0xFFFFFFFF);
-		// 两栏各自的栏目名
-		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.reading_section"),
-				this.width / 2 - GAP / 2 - COLUMN / 2, y - 12, 0xFFA0A0A0);
-		graphics.centeredText(this.font, Component.translatable("settings.memorypalace.password_section"),
-				this.width / 2 + GAP / 2 + COLUMN / 2, y - 12, 0xFFA0A0A0);
-		// 按键一览（冲突的标红），在两栏按钮下面、"修改按键/完成"上面
-		graphics.centeredText(this.font, keySummary(), this.width / 2, y + ROWS * ROW + 6, 0xFFA0A0A0);
-		graphics.centeredText(this.font, message, this.width / 2, y + ROWS * ROW + 46, 0xFFFFE080);
+		graphics.centeredText(this.font, this.title, this.width / 2, tabsTop() - 16, 0xFFFFFFFF);
+		int below = contentTop() + 4 * ROW + 2;
+		if (tab == Tab.READING) {
+			// 按键一览（冲突的标红）
+			graphics.centeredText(this.font, keySummary(), this.width / 2, below, 0xFFA0A0A0);
+		}
+		graphics.centeredText(this.font, message, this.width / 2, below + 14, 0xFFFFE080);
 	}
 
 	@Override
