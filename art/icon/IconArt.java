@@ -103,13 +103,17 @@ public final class IconArt {
 		boxes.add(new Box(7.5, 7.5, z + 12, 8.5, 8.5, z + 15, gold));          // 顶尖
 		// 四座角塔：主殿四个角各一座
 		for (double[] c : new double[][]{{3, 3}, {10.5, 3}, {3, 10.5}, {10.5, 10.5}}) {
-			double x = c[0], y = c[1];
+			double x = c[0], y = c[1], w = 2.5;
 			if (x > 10 && y > 10) {
-				frontTower = boxes.size(); // 前角这座挡在主殿正前方，要和后面描一道分界（见 separateFrontTower）
+				frontTower = boxes.size(); // 前角这座挡在主殿正前方，要和后面区分开（见 separateFrontTower）
+				// 它的塔帽叠在同样是金色的屋顶前面，轮廓看不出来，同样大小会显得细：加粗一点，外角不动、往里长
+				w = 3;
+				x = y = 13 - w;
 			}
-			boxes.add(new Box(x, y, z, x + 2.5, y + 2.5, z + 11, IconArt::tower));
-			boxes.add(new Box(x - 0.25, y - 0.25, z + 11, x + 2.75, y + 2.75, z + 12, IconArt::trim));
-			boxes.add(new Box(x + 0.75, y + 0.75, z + 12, x + 1.75, y + 1.75, z + 14, gold));
+			double m = (w - 1) / 2; // 顶尖居中
+			boxes.add(new Box(x, y, z, x + w, y + w, z + 11, IconArt::tower));
+			boxes.add(new Box(x - 0.25, y - 0.25, z + 11, x + w + 0.25, y + w + 0.25, z + 12, IconArt::trim));
+			boxes.add(new Box(x + m, y + m, z + 12, x + m + 1, y + m + 1, z + 14, gold));
 		}
 	}
 
@@ -287,10 +291,6 @@ public final class IconArt {
 		// 前塔右下的塔脚被外侧高出来的那叠书页挡掉一格，轮廓看着像缺了一块：补成旁边那格的塔身颜色
 		px[30][33] = px[30][32];
 		owner[30][33] = owner[30][32];
-		String mode = System.getProperty("sep", "shadow+edge");
-		if (mode.equals("none")) {
-			return;
-		}
 		boolean[][] shadow = new boolean[N][N];
 		boolean[][] edge = new boolean[N][N];
 		for (int y = 0; y < N; y++) {
@@ -307,7 +307,7 @@ public final class IconArt {
 		for (int y = 0; y < N; y++) {
 			for (int x = 0; x < N; x++) {
 				if (shadow[y][x]) px[y][x] = goldStep(px[y][x], 0.8);
-				if (edge[y][x] && mode.contains("edge")) px[y][x] = goldStep(px[y][x], 1.12);
+				if (edge[y][x]) px[y][x] = goldStep(px[y][x], 1.12);
 			}
 		}
 	}
