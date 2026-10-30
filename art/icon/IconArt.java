@@ -280,27 +280,51 @@ public final class IconArt {
 	}
 
 	/**
-	 * 前角的塔和后面的主殿都是金色，挨在一起看不出是一座单独的塔：
-	 * 塔外紧挨着它的那一圈主殿像素压成深金色，当作分界线。
+	 * 前角的塔和后面的主殿都是金色，挨在一起看不出是一座单独的塔。不描线（平涂的线会盖掉金块纹理），而是：
+	 * 塔两侧紧挨着的主殿像素压暗一档，像塔投在墙上的影子；塔身靠左的一列提亮一档，像迎光的棱。
 	 */
 	static void separateFrontTower() {
-		boolean[][] line = new boolean[N][N];
+		String mode = System.getProperty("sep", "shadow+edge");
+		if (mode.equals("none")) {
+			return;
+		}
+		boolean[][] shadow = new boolean[N][N];
+		boolean[][] edge = new boolean[N][N];
 		for (int y = 0; y < N; y++) {
 			for (int x = 0; x < N; x++) {
-				if (owner[y][x] >= 0 && owner[y][x] < frontTower
-						&& (isFront(x - 1, y) || isFront(x + 1, y) || isFront(x, y - 1))) {
-					line[y][x] = true;
+				boolean front = isFront(x, y);
+				if (!front && owner[y][x] >= 0 && (isFront(x - 1, y) || isFront(x + 1, y))) {
+					shadow[y][x] = true;
+				}
+				if (front && x > 0 && owner[y][x - 1] >= 0 && !isFront(x - 1, y)) {
+					edge[y][x] = true;
 				}
 			}
 		}
 		for (int y = 0; y < N; y++) {
 			for (int x = 0; x < N; x++) {
-				if (line[y][x]) px[y][x] = SEPARATOR;
+				if (shadow[y][x]) px[y][x] = goldStep(px[y][x], 0.8);
+				if (edge[y][x] && mode.contains("edge")) px[y][x] = goldStep(px[y][x], 1.12);
 			}
 		}
 	}
 
-	static final int SEPARATOR = 0x7A5418;
+	/**
+	 * 金色像素按"同一个面、乘 f"换一档：只在 3 种金 × 3 个面的范围里变，颜色数量不会失控。
+	 * 不是金块的像素（檐口、窗、门）原样不动。
+	 */
+	static int goldStep(int rgb, double f) {
+		double[] faces = {TOP, LEFT, RIGHT};
+		int[] golds = {GOLD[0], GOLD[1], GOLD[2], GOLD_EDGE};
+		for (double face : faces) {
+			for (int g : golds) {
+				if (rgb == shade(g, face)) {
+					return shade(g, face * f);
+				}
+			}
+		}
+		return rgb;
+	}
 
 	static boolean isFront(int x, int y) {
 		return x >= 0 && y >= 0 && x < N && y < N && owner[y][x] >= frontTower;
@@ -427,7 +451,7 @@ public final class IconArt {
 
 	// ---- 网格文件与出图 ----
 
-	static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@$%&*+=?!<>~^";
+	static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@$%&*+=?!<>~^()[]{};:,._-/|";
 
 	static void writeGrid() throws IOException {
 		Map<Integer, Character> keys = new LinkedHashMap<>();
