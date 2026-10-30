@@ -284,6 +284,9 @@ public final class IconArt {
 	 * 塔两侧紧挨着的主殿像素压暗一档，像塔投在墙上的影子；塔身靠左的一列提亮一档，像迎光的棱。
 	 */
 	static void separateFrontTower() {
+		// 前塔右下的塔脚被外侧高出来的那叠书页挡掉一格，轮廓看着像缺了一块：补成旁边那格的塔身颜色
+		px[30][33] = px[30][32];
+		owner[30][33] = owner[30][32];
 		String mode = System.getProperty("sep", "shadow+edge");
 		if (mode.equals("none")) {
 			return;
