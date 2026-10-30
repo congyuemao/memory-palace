@@ -58,6 +58,9 @@ public final class IconArt {
 	static final List<Box> boxes = new ArrayList<>();
 	static final int[][] px = new int[N][N];
 	static final boolean[][] obj = new boolean[N][N];
+	// 每个像素是哪个方块画的（boxes 里的下标，-1 = 背景）；前角那座塔的方块从 frontTower 开始
+	static final int[][] owner = new int[N][N];
+	static int frontTower = Integer.MAX_VALUE;
 
 	public static void main(String[] args) throws IOException {
 		if (args.length == 1 && args[0].equals("draw")) {
@@ -76,6 +79,7 @@ public final class IconArt {
 		sky();
 		scene();
 		rasterize();
+		separateFrontTower();
 		shadowOnShelfTop();
 		outline();
 		beam();
@@ -97,9 +101,12 @@ public final class IconArt {
 		boxes.add(new Box(5.5, 5.5, z + 8, 10.5, 10.5, z + 10, gold));         // 第二级屋顶
 		boxes.add(new Box(6.75, 6.75, z + 10, 9.25, 9.25, z + 12, gold));      // 第三级
 		boxes.add(new Box(7.5, 7.5, z + 12, 8.5, 8.5, z + 15, gold));          // 顶尖
-		// 三座塔：后、左、右各一，正前方那个角空着，不挡门
-		for (double[] c : new double[][]{{3, 3}, {10.5, 3}, {3, 10.5}}) {
+		// 四座角塔：主殿四个角各一座
+		for (double[] c : new double[][]{{3, 3}, {10.5, 3}, {3, 10.5}, {10.5, 10.5}}) {
 			double x = c[0], y = c[1];
+			if (x > 10 && y > 10) {
+				frontTower = boxes.size(); // 前角这座挡在主殿正前方，要和后面描一道分界（见 separateFrontTower）
+			}
 			boxes.add(new Box(x, y, z, x + 2.5, y + 2.5, z + 11, IconArt::tower));
 			boxes.add(new Box(x - 0.25, y - 0.25, z + 11, x + 2.75, y + 2.75, z + 12, IconArt::trim));
 			boxes.add(new Box(x + 0.75, y + 0.75, z + 12, x + 1.75, y + 1.75, z + 14, gold));
@@ -200,8 +207,8 @@ public final class IconArt {
 	/** 主殿：左面（正面）开一扇大门，右面两扇小窗。 */
 	static int hall(Face face, double u, double v) {
 		if (face == Face.LEFT) {
-			if (u > 6.5 && u < 9.5 && v < Z0 + 4.5) return DOOR;
-			if (u > 6 && u < 10 && v >= Z0 + 4.5 && v < Z0 + 5.3) return GOLD_EDGE; // 门楣
+			if (u > 5.5 && u < 8.3 && v < Z0 + 4.5) return DOOR; // 偏左一点：右边被前角的塔挡着
+			if (u > 5 && u < 8.8 && v >= Z0 + 4.5 && v < Z0 + 5.3) return GOLD_EDGE; // 门楣
 		} else if (face == Face.RIGHT) {
 			boolean window = (u > 5.6 && u < 6.9 || u > 9.1 && u < 10.4) && v > Z0 + 2.5 && v < Z0 + 4.8;
 			if (window) return GOLD_EDGE; // 窗用暗金不用黑，缩小后才不会和门凑成一张脸
@@ -226,7 +233,10 @@ public final class IconArt {
 	static void rasterize() {
 		double[][] depth = new double[N][N];
 		for (double[] row : depth) java.util.Arrays.fill(row, Double.NEGATIVE_INFINITY);
-		for (Box b : boxes) {
+		for (int[] row : owner) java.util.Arrays.fill(row, -1);
+		for (int i = 0; i < boxes.size(); i++) {
+			Box b = boxes.get(i);
+			current = i;
 			for (int y = 0; y < N; y++) {
 				for (int x = 0; x < N; x++) {
 					double a = (x + 0.5 - CX) / K;           // X - Y
@@ -258,12 +268,42 @@ public final class IconArt {
 		return value >= lo && value < hi;
 	}
 
+	static int current; // rasterize 正在画的方块
+
 	static void plot(double[][] depth, int x, int y, double d, int rgb) {
 		if (d > depth[y][x]) {
 			depth[y][x] = d;
 			px[y][x] = rgb;
 			obj[y][x] = true;
+			owner[y][x] = current;
 		}
+	}
+
+	/**
+	 * 前角的塔和后面的主殿都是金色，挨在一起看不出是一座单独的塔：
+	 * 塔外紧挨着它的那一圈主殿像素压成深金色，当作分界线。
+	 */
+	static void separateFrontTower() {
+		boolean[][] line = new boolean[N][N];
+		for (int y = 0; y < N; y++) {
+			for (int x = 0; x < N; x++) {
+				if (owner[y][x] >= 0 && owner[y][x] < frontTower
+						&& (isFront(x - 1, y) || isFront(x + 1, y) || isFront(x, y - 1))) {
+					line[y][x] = true;
+				}
+			}
+		}
+		for (int y = 0; y < N; y++) {
+			for (int x = 0; x < N; x++) {
+				if (line[y][x]) px[y][x] = SEPARATOR;
+			}
+		}
+	}
+
+	static final int SEPARATOR = 0x7A5418;
+
+	static boolean isFront(int x, int y) {
+		return x >= 0 && y >= 0 && x < N && y < N && owner[y][x] >= frontTower;
 	}
 
 	/** 书在书架顶面上投下的影子：顶面上靠近书的一圈压暗。 */
