@@ -12,7 +12,7 @@ import java.util.UUID;
  * 重发去重：
  * - 同一个编号已经保存成功过（记在内存里，每人最近 REMEMBER 条）→ 直接回"已保存"，不再追加
  * - 客户端标了"重发"：收件箱里已经有完全一样的这一行（服务器重启过、内存里没记录）→ 同样不再追加
- * 权限检查、笔记库是否打开由调用方（ToolPayloads）先做。
+ * 权限检查、笔记库是否打开由调用方（CapturePayloads）先做。
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class CaptureService {

@@ -3,14 +3,12 @@ package com.memorypalace.client;
 import com.memorypalace.client.book.BookSettings;
 import com.memorypalace.client.crypto.BoxPins;
 import com.memorypalace.client.crypto.ClientKeys;
-import com.memorypalace.client.crypto.PasswordScreen;
 import com.memorypalace.client.crypto.RecoveryKeyScreen;
 import com.memorypalace.client.crypto.SecurityKey;
+import com.memorypalace.client.crypto.VaultPasswords;
 import com.memorypalace.core.crypto.MasterKey;
 import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.KeyRing;
-import com.memorypalace.core.vault.Vault;
-import com.memorypalace.mc.PalaceServer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
@@ -122,13 +120,13 @@ public class SettingsScreen extends Screen {
 		// 密码相关：都要先输入当前密码证明是本人。钥匙圈存在当前世界（服务器）上，每人一个，所以要在世界里才能用
 		boolean inWorld = this.minecraft.player != null;
 		Button change = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.change_password"),
-				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(VaultPasswords.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_change"), this,
 						(password, key) -> this.minecraft.gui.setScreen(
-								PasswordScreen.newPassword(keyring, key, this, () -> this.minecraft.gui.setScreen(this)))))))
+								VaultPasswords.newPassword(keyring, key, this, () -> this.minecraft.gui.setScreen(this)))))))
 				.bounds(left, y, COLUMN, 20).build());
 		Button regen = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.new_recovery"),
-				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(VaultPasswords.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_recovery"), this, (password, key) -> {
 							try {
 								// 密码只在这个回调里有效（回调结束就清零），所以"带新恢复密钥"和"不带恢复密钥"两个版本现在就算好
@@ -152,7 +150,7 @@ public class SettingsScreen extends Screen {
 						}))))
 				.bounds(left, y + ROW, COLUMN, 20).build());
 		Button remove = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.remove_recovery"),
-				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(PasswordScreen.verify(keyring,
+				b -> withKeyring(keyring -> this.minecraft.gui.setScreen(VaultPasswords.verify(keyring,
 						Component.translatable("crypto.memorypalace.verify_remove_recovery"), this, (password, key) -> {
 							try {
 								writeAndShow(KeyRing.removeRecovery(keyring, password), keyring, "settings.memorypalace.recovery_removed");
@@ -169,7 +167,7 @@ public class SettingsScreen extends Screen {
 						show("settings.memorypalace.no_recovery");
 						return;
 					}
-					this.minecraft.gui.setScreen(PasswordScreen.recover(keyring, this, () -> this.minecraft.gui.setScreen(this)));
+					this.minecraft.gui.setScreen(VaultPasswords.recover(keyring, this, () -> this.minecraft.gui.setScreen(this)));
 				}))
 				.bounds(left, y + 3 * ROW, COLUMN, 20).build());
 
@@ -203,21 +201,21 @@ public class SettingsScreen extends Screen {
 		int x = this.width / 2 - WIDE / 2;
 		int y = contentTop();
 		// 笔记库和备份都在本机硬盘上：只有单人游戏、自己开的局域网才能用
-		Vault vault = this.minecraft.hasSingleplayerServer() ? PalaceServer.vault() : null;
-		Path backups = vault != null ? PalaceServer.backupDir() : null;
+		Path vault = LocalVault.root().orElse(null);
+		Path backups = LocalVault.backupDir().orElse(null);
 		Component unavailable = Component.translatable("settings.memorypalace.local_only");
 		Button reveal = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.open_folder"),
-				b -> ExternalEditor.reveal(vault.root()))
+				b -> ExternalEditor.reveal(vault))
 				.bounds(x, y, WIDE, 20)
 				.tooltip(Tooltip.create(vault != null ? Component.translatable("settings.memorypalace.open_folder_tooltip") : unavailable))
 				.build());
 		Button backupNow = addRenderableWidget(Button.builder(Component.translatable("settings.memorypalace.backup_now"), b -> {
 			b.active = false;
 			show("settings.memorypalace.backup_running");
-			PalaceServer.backupNow(ok -> this.minecraft.execute(() -> {
+			LocalVault.backupNow(ok -> {
 				b.active = true;
 				show(ok ? "settings.memorypalace.backup_done" : "settings.memorypalace.backup_failed");
-			}));
+			});
 		}).bounds(x, y + ROW, WIDE, 20)
 				.tooltip(Tooltip.create(backups != null ? Component.translatable("settings.memorypalace.backup_now_tooltip") : unavailable))
 				.build());
@@ -305,7 +303,7 @@ public class SettingsScreen extends Screen {
 			return;
 		}
 		if (registered == null) {
-			this.minecraft.gui.setScreen(PasswordScreen.verify(keyring, Component.translatable("crypto.memorypalace.verify_token"), this,
+			this.minecraft.gui.setScreen(VaultPasswords.verify(keyring, Component.translatable("crypto.memorypalace.verify_token"), this,
 					(password, key) -> registerToken(keyring, key)));
 			return;
 		}
@@ -314,7 +312,7 @@ public class SettingsScreen extends Screen {
 				this.minecraft.gui.setScreen(this);
 				return;
 			}
-			this.minecraft.gui.setScreen(PasswordScreen.verify(keyring, Component.translatable("crypto.memorypalace.verify_remove_token"), this,
+			this.minecraft.gui.setScreen(VaultPasswords.verify(keyring, Component.translatable("crypto.memorypalace.verify_remove_token"), this,
 					(password, key) -> writeAndShow(KeyRing.withoutToken(keyring), keyring, "settings.memorypalace.token_removed")));
 		}, Component.translatable("settings.memorypalace.token_remove_title"),
 				Component.translatable("settings.memorypalace.token_remove_message"),

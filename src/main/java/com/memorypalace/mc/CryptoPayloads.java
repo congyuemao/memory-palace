@@ -12,7 +12,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.io.IOException;
@@ -127,7 +126,7 @@ public final class CryptoPayloads {
 
 	/**
 	 * 服务端 → 客户端：请对这篇笔记做 action。body 是服务端存着的正文（明文或密文），客户端据此加密/解密后再保存回来。
-	 * action："encrypt" 加密、"encrypt_new" 加密后打开编辑器（新建加密日记）、"decrypt" 解除加密、"lock" 立刻上锁（noteId 无意义）。
+	 * action：CryptoAction 的 wire 字符串（各动作的含义见 CryptoAction）。
 	 */
 	public record Action(UUID noteId, String action, String title, String body) implements CustomPacketPayload {
 		public static final Type<Action> TYPE = new Type<>(MemoryPalace.id("crypto_action"));
@@ -202,7 +201,7 @@ public final class CryptoPayloads {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.not_encrypted", note.title()));
 				return;
 			}
-			if (!sendAction(player, noteId, "decrypt", note.title(), read.get().body())) {
+			if (!sendAction(player, noteId, CryptoAction.DECRYPT, note.title(), read.get().body())) {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", MAX_ACTION_BODY));
 			}
 		} catch (IOException e) {
@@ -254,11 +253,11 @@ public final class CryptoPayloads {
 	}
 
 	/** 把正文发给客户端做加密/解密。正文太长时不发（绝不截断——截断的密文解不开，截断的明文加密后就丢了后半段）。 */
-	public static boolean sendAction(ServerPlayer player, UUID noteId, String action, String title, String body) {
+	public static boolean sendAction(ServerPlayer player, UUID noteId, CryptoAction action, String title, String body) {
 		if (body.length() > MAX_ACTION_BODY * 4) {
 			return false;
 		}
-		ServerPlayNetworking.send(player, new Action(noteId, action, OpenNotePayload.clip(title, OpenNotePayload.MAX_TITLE), body));
+		ServerPlayNetworking.send(player, new Action(noteId, action.wire, OpenNotePayload.clip(title, OpenNotePayload.MAX_TITLE), body));
 		return true;
 	}
 

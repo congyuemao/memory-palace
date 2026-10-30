@@ -302,7 +302,7 @@ public final class ClientKeys {
 			return;
 		}
 		withKeyring(content -> Minecraft.getInstance().gui.setScreen(content.isEmpty()
-				? PasswordScreen.setup(returnTo, then)
-				: PasswordScreen.unlock(content, returnTo, then)));
+				? VaultPasswords.setup(returnTo, then)
+				: VaultPasswords.unlock(content, returnTo, then)));
 	}
 }

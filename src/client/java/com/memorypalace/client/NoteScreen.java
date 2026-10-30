@@ -106,6 +106,48 @@ public class NoteScreen extends BookScreen {
 		this.minecraft.gui.setScreen(new EditorScreen(noteId, this.title, body, encrypted, storedHash));
 	}
 
+	/**
+	 * 点书页上的链接：笔记链接交给服务端找到那篇打开（读不了的和不存在的一样说找不到）；
+	 * 网址先弹原版的确认框，确认后用浏览器打开。
+	 */
+	@Override
+	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+		if (event.button() == LEFT_BUTTON && noteId != null) {
+			int leftIndex = spread * 2;
+			String link = leftIndex < pages.size() ? linkAt(pages.get(leftIndex), leftTextX(), event.x(), event.y()) : null;
+			if (link == null && leftIndex + 1 < pages.size()) {
+				link = linkAt(pages.get(leftIndex + 1), rightTextX(), event.x(), event.y());
+			}
+			if (link != null) {
+				openLink(link);
+				return true;
+			}
+		}
+		return super.mouseClicked(event, doubleClick);
+	}
+
+	// 26.x 底层换成了 SDL：左键是 1（不是 GLFW 的 0），原版按钮也按 1 判断
+	private static final int LEFT_BUTTON = 1;
+
+	private void openLink(String link) {
+		if (com.memorypalace.core.vault.NoteLinks.isExternal(link)) {
+			java.net.URI uri;
+			try {
+				uri = new java.net.URI(link);
+			} catch (java.net.URISyntaxException e) {
+				return;
+			}
+			String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+			if (scheme.equals("http") || scheme.equals("https")) {
+				net.minecraft.client.gui.screens.ConfirmLinkScreen.confirmLinkNow(this, uri);
+			}
+			return;
+		}
+		if (link.length() <= com.memorypalace.mc.LinkPayloads.MAX_LINK) {
+			net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(new com.memorypalace.mc.LinkPayloads.OpenLink(noteId, link));
+		}
+	}
+
 	private int maxSpread() {
 		return Math.max(0, (pages.size() - 1) / 2);
 	}

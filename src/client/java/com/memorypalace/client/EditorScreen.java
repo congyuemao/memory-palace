@@ -13,7 +13,6 @@ import com.memorypalace.core.editor.UndoHistory;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.EditPayloads;
 import com.memorypalace.mc.OpenNotePayload;
-import com.memorypalace.mc.PalaceServer;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -26,9 +25,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.lang.reflect.Field;
-import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -280,9 +277,7 @@ public class EditorScreen extends BookScreen {
 	}
 
 	private void openExternal() {
-		Vault vault = PalaceServer.vault();
-		Optional<Path> path = vault == null ? Optional.empty() : vault.pathOf(noteId);
-		path.ifPresent(ExternalEditor::open);
+		LocalVault.notePath(noteId).ifPresent(ExternalEditor::open);
 	}
 
 	// ---- 关闭 ----

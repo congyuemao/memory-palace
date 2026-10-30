@@ -26,16 +26,30 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 笔记库：一个装着 .md 文件的普通文件夹（默认 saves/&lt;世界&gt;/memory-palace/）。
  * 世界里的笔记书只存 UUID，靠这里把 UUID 翻译回文件。
- * 线程安全：所有公开方法可以从游戏的服务端线程和客户端线程同时调用。
+ * 线程安全：所有公开方法可以从游戏的服务端线程、后台线程和客户端线程同时调用。
+ * 索引的读（find、list、resolve、listFolder）不拿锁；读写文件、改索引都在 this 锁里。
+ * 读过的正文按文件的修改时间和大小缓存：没变就不再读盘（搜索、反向链接会把每篇都读一遍）。
  */
 public final class Vault {
 	private final Path root;
-	private Map<UUID, NoteSummary> index = Map.of();
-	private List<NoteSummary> notes = List.of();
+	// ID → 目录卡片；路径（不带 .md）→ ID。只在 this 锁里改，读不用锁
+	private final Map<UUID, NoteSummary> index = new ConcurrentHashMap<>();
+	private final Map<String, UUID> byPath = new ConcurrentHashMap<>();
+	// 按路径排好的全部卡片：改了索引就作废，下次 list() 时重排
+	private volatile List<NoteSummary> sorted = List.of();
+	private volatile boolean sortedStale;
+	// 读过的正文（见 readNote）。按总字数限制大小，最久没用的先丢
+	private static final long CACHE_CHARS = 8_000_000;
+	private final java.util.LinkedHashMap<UUID, Cached> cache = new java.util.LinkedHashMap<>(256, 0.75F, true);
+	private long cachedChars;
+
+	/** 缓存的一篇：读的时候文件的路径、修改时间、大小，和当时做出来的卡片、正文。 */
+	private record Cached(String relativePath, long mtime, long size, NoteSummary note, String body) {}
 
 	/** root 不存在时自动创建。 */
 	public Vault(Path root) throws IOException {
@@ -86,14 +100,43 @@ public final class Vault {
 		});
 		files.sort(Comparator.comparing(this::relativePath));
 		Map<UUID, NoteSummary> newIndex = new HashMap<>();
-		List<NoteSummary> newNotes = new ArrayList<>();
 		Map<UUID, Long> newModified = new HashMap<>();
-		for (Path file : files) {
-			String text;
-			long mtime = modifiedTime(file);
+		List<Cached> fresh = new ArrayList<>();
+		Map<String, Cached> cachedByPath = new HashMap<>();
+		for (Cached c : cache.values()) {
+			cachedByPath.put(c.relativePath(), c);
+		}
+		// 先并行查属性、读内容（读盘、杀毒软件扫描的等待可以重叠），再按路径顺序处理（分配 ID 的结果要稳定）
+		long[][] stats = new long[files.size()][];
+		String[] texts = new String[files.size()];
+		java.util.stream.IntStream.range(0, files.size()).parallel().forEach(i -> {
+			Path file = files.get(i);
+			stats[i] = stat(file);
+			Cached known = cachedByPath.get(relativePath(file));
+			if (known != null && stats[i] != null && known.mtime() == stats[i][0] && known.size() == stats[i][1]) {
+				return; // 没变过，下面直接用缓存
+			}
 			try {
-				text = Files.readString(file, StandardCharsets.UTF_8);
+				texts[i] = Files.readString(file, StandardCharsets.UTF_8);
 			} catch (IOException e) {
+				// 读不了：下面跳过这个文件
+			}
+		});
+		for (int i = 0; i < files.size(); i++) {
+			Path file = files.get(i);
+			String rel = relativePath(file);
+			long[] stat = stats[i];
+			// 没变过的文件（路径、修改时间、大小都和缓存一样）不用再读
+			Cached known = cachedByPath.get(rel);
+			if (known != null && stat != null && known.mtime() == stat[0] && known.size() == stat[1]
+					&& !newIndex.containsKey(known.note().id())) {
+				newIndex.put(known.note().id(), known.note());
+				newModified.put(known.note().id(), stat[0]);
+				continue;
+			}
+			String text = texts[i];
+			long mtime = stat == null ? -1 : stat[0];
+			if (text == null) {
 				continue;
 			}
 			FrontMatter.Parsed parsed = FrontMatter.parse(text);
@@ -115,14 +158,30 @@ public final class Vault {
 					continue;
 				}
 			}
-			NoteSummary note = summarize(id, relativePath(file), parsed);
+			NoteSummary note = summarize(id, rel, parsed);
 			newIndex.put(id, note);
 			newModified.put(id, mtime);
-			newNotes.add(note);
+			if (stat != null && id.equals(parsed.id())) {
+				// 读过的顺便记进缓存：下次扫描、搜索不用再读（写回了新 ID 的文件内容变了，不记）
+				fresh.add(new Cached(rel, stat[0], stat[1], note, parsed.body()));
+			}
 		}
-		index = Map.copyOf(newIndex);
-		notes = List.copyOf(newNotes);
-		modified = Map.copyOf(newModified);
+		index.clear();
+		byPath.clear();
+		modified.clear();
+		index.putAll(newIndex);
+		modified.putAll(newModified);
+		for (NoteSummary note : newIndex.values()) {
+			byPath.put(stemOf(note.relativePath()), note.id());
+		}
+		cache.values().removeIf(c -> !c.note().equals(index.get(c.note().id())));
+		cachedChars = cache.values().stream().mapToLong(c -> c.body().length()).sum();
+		for (Cached c : fresh) {
+			if (c.note().equals(index.get(c.note().id()))) {
+				remember(c);
+			}
+		}
+		sortedStale = true;
 	}
 
 	/** 从解析好的文件内容做一张目录卡片（scan 和 readNote 共用，保证两边算法一样）。 */
@@ -137,18 +196,65 @@ public final class Vault {
 		return new NoteSummary(id, relativePath, title, encrypted, NoteAccess.parse(parsed.fields()));
 	}
 
-	/** 只更新索引里的一篇（文件刚读过，权限、标题、加密状态以文件为准）。mtime 是读的那一刻文件的修改时间。 */
+	/** 只更新索引里的一篇（文件刚读过，权限、标题、加密状态以文件为准）。mtime 是读的那一刻文件的修改时间。调用方持有锁。 */
 	private void updateIndex(NoteSummary fresh, long mtime) {
-		Map<UUID, Long> newModified = new HashMap<>(modified);
-		newModified.put(fresh.id(), mtime);
-		modified = Map.copyOf(newModified);
-		if (fresh.equals(index.get(fresh.id()))) {
+		modified.put(fresh.id(), mtime);
+		NoteSummary old = index.put(fresh.id(), fresh);
+		if (fresh.equals(old)) {
 			return;
 		}
-		Map<UUID, NoteSummary> newIndex = new HashMap<>(index);
-		newIndex.put(fresh.id(), fresh);
-		index = Map.copyOf(newIndex);
-		notes = notes.stream().map(n -> n.id().equals(fresh.id()) ? fresh : n).toList();
+		if (old != null && !old.relativePath().equals(fresh.relativePath())) {
+			byPath.remove(stemOf(old.relativePath()), fresh.id());
+		}
+		byPath.put(stemOf(fresh.relativePath()), fresh.id());
+		sortedStale = true;
+	}
+
+	/** 从索引里去掉一篇（文件已经不在了）。调用方持有锁。 */
+	private void removeFromIndex(UUID id) {
+		NoteSummary old = index.remove(id);
+		modified.remove(id);
+		uncache(id);
+		if (old != null) {
+			byPath.remove(stemOf(old.relativePath()), id);
+			sortedStale = true;
+		}
+	}
+
+	private void remember(Cached entry) {
+		uncache(entry.note().id());
+		if (entry.body().length() > CACHE_CHARS / 4) {
+			return; // 特别大的不缓存，免得一篇就挤掉全部
+		}
+		cache.put(entry.note().id(), entry);
+		cachedChars += entry.body().length();
+		var it = cache.values().iterator();
+		while (cachedChars > CACHE_CHARS && it.hasNext()) {
+			cachedChars -= it.next().body().length();
+			it.remove();
+		}
+	}
+
+	private void uncache(UUID id) {
+		Cached old = cache.remove(id);
+		if (old != null) {
+			cachedChars -= old.body().length();
+		}
+	}
+
+	/** 路径去掉 .md（按路径找笔记时用的键）。 */
+	private static String stemOf(String relativePath) {
+		return isMarkdown(relativePath) ? relativePath.substring(0, relativePath.length() - 3) : relativePath;
+	}
+
+	/** 文件的修改时间和大小；读不到（不存在等）时为 null。 */
+	private static long[] stat(Path file) {
+		try {
+			BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
+			return new long[]{attrs.lastModifiedTime().toMillis(), attrs.size()};
+		} catch (IOException e) {
+			return null;
+		}
 	}
 
 	/**
@@ -162,7 +268,7 @@ public final class Vault {
 	}
 
 	// 每篇笔记文件上次读到时的修改时间：refreshChanged 用它发现"在外部被改过"的文件
-	private Map<UUID, Long> modified = Map.of();
+	private final Map<UUID, Long> modified = new ConcurrentHashMap<>();
 
 	private static long modifiedTime(Path file) {
 		try {
@@ -179,29 +285,22 @@ public final class Vault {
 	 * 有文件不见了（被删、被改名）就整库重扫一次：按 ID 找回改了名的，删掉的从索引里去掉，
 	 * 不让旧卡片（标题、路径、权限）一直留着。
 	 */
-	public synchronized void refreshChanged() throws IOException {
-		boolean missing = false;
-		for (NoteSummary note : notes) {
-			Path file = root.resolve(note.relativePath());
-			long now = modifiedTime(file);
-			Long seen = modified.get(note.id());
+	public void refreshChanged() throws IOException {
+		// 查修改时间不拿锁（几千个文件也要一会儿），这期间保存、打开照常进行；只有真变了的才拿锁重读
+		java.util.concurrent.atomic.AtomicBoolean missing = new java.util.concurrent.atomic.AtomicBoolean();
+		List<UUID> changed = list().parallelStream().filter(note -> {
+			long now = modifiedTime(root.resolve(note.relativePath()));
 			if (now < 0) {
-				missing = true;
-				continue;
+				missing.set(true);
+				return false;
 			}
-			if (seen != null && seen == now) {
-				continue;
-			}
-			try {
-				FrontMatter.Parsed parsed = FrontMatter.parse(Files.readString(file, StandardCharsets.UTF_8));
-				if (note.id().equals(parsed.id())) {
-					updateIndex(summarize(note.id(), note.relativePath(), parsed), now);
-				}
-			} catch (IOException e) {
-				// 读不了就先保留旧卡片，下次再试
-			}
+			Long seen = modified.get(note.id());
+			return seen == null || seen != now;
+		}).map(NoteSummary::id).toList();
+		for (UUID id : changed) {
+			readNote(id); // 读不了就先保留旧卡片，下次再试
 		}
-		if (missing) {
+		if (missing.get()) {
 			scan();
 		}
 	}
@@ -223,11 +322,21 @@ public final class Vault {
 			if (note != null) {
 				try {
 					Path file = root.resolve(note.relativePath());
-					long mtime = modifiedTime(file);
+					long[] stat = stat(file);
+					Cached known = cache.get(id);
+					if (stat != null && known != null && known.relativePath().equals(note.relativePath())
+							&& known.mtime() == stat[0] && known.size() == stat[1]) {
+						modified.put(id, stat[0]);
+						return Optional.of(new Read(known.note(), known.body()));
+					}
 					FrontMatter.Parsed parsed = FrontMatter.parse(Files.readString(file, StandardCharsets.UTF_8));
 					if (id.equals(parsed.id())) {
 						NoteSummary fresh = summarize(id, note.relativePath(), parsed);
+						long mtime = stat == null ? -1 : stat[0];
 						updateIndex(fresh, mtime);
+						if (stat != null) {
+							remember(new Cached(note.relativePath(), stat[0], stat[1], fresh, parsed.body()));
+						}
 						return Optional.of(new Read(fresh, parsed.body()));
 					}
 				} catch (NoSuchFileException e) {
@@ -243,16 +352,26 @@ public final class Vault {
 		return Optional.empty();
 	}
 
-	/** 所有笔记，按 relativePath 字典序排序。 */
-	public synchronized List<NoteSummary> list() {
-		return notes;
+	/** 所有笔记，按 relativePath 字典序排序（不可修改的快照）。 */
+	public List<NoteSummary> list() {
+		if (sortedStale) {
+			synchronized (this) {
+				if (sortedStale) {
+					sortedStale = false;
+					List<NoteSummary> all = new ArrayList<>(index.values());
+					all.sort(Comparator.comparing(NoteSummary::relativePath));
+					sorted = List.copyOf(all);
+				}
+			}
+		}
+		return sorted;
 	}
 
 	/**
 	 * 某个文件夹里"直接"的笔记（不含子文件夹里的），按 relativePath 排序。
 	 * folder 用 "/" 分隔，"" 表示根目录；前后的 "/" 忽略。
 	 */
-	public synchronized List<NoteSummary> listFolder(String folder) {
+	public List<NoteSummary> listFolder(String folder) {
 		int start = 0;
 		int end = folder.length();
 		while (start < end && folder.charAt(start) == '/') {
@@ -262,10 +381,10 @@ public final class Vault {
 			end--;
 		}
 		String normalized = folder.substring(start, end);
-		return notes.stream().filter(note -> note.folder().equals(normalized)).toList();
+		return list().stream().filter(note -> note.folder().equals(normalized)).toList();
 	}
 
-	public synchronized Optional<NoteSummary> find(UUID id) {
+	public Optional<NoteSummary> find(UUID id) {
 		return id == null ? Optional.empty() : Optional.ofNullable(index.get(id));
 	}
 
@@ -273,7 +392,7 @@ public final class Vault {
 	 * 按相对路径找笔记，例如 "线性代数/特征值.md"；可以省略 ".md"。分隔符 "/" 和 "\" 都接受。
 	 * 路径如果跑到笔记库外面（含 ".."、绝对路径等）一律返回 empty，绝不抛异常。
 	 */
-	public synchronized Optional<NoteSummary> resolve(String relativePath) {
+	public Optional<NoteSummary> resolve(String relativePath) {
 		if (relativePath == null || relativePath.isEmpty()) {
 			return Optional.empty();
 		}
@@ -295,16 +414,8 @@ public final class Vault {
 			if (!target.startsWith(root) || target.equals(root)) {
 				return Optional.empty();
 			}
-			String requested = relativePath(target);
-			boolean hasExtension = isMarkdown(requested);
-			return notes.stream().filter(note -> {
-				String candidate = note.relativePath();
-				if (hasExtension) {
-					return candidate.substring(0, candidate.length() - 3)
-							.equals(requested.substring(0, requested.length() - 3));
-				}
-				return candidate.substring(0, candidate.length() - 3).equals(requested);
-			}).findFirst();
+			UUID id = byPath.get(stemOf(relativePath(target)));
+			return id == null ? Optional.empty() : Optional.ofNullable(index.get(id));
 		} catch (InvalidPathException | SecurityException e) {
 			return Optional.empty();
 		}
@@ -320,7 +431,7 @@ public final class Vault {
 	}
 
 	/** 笔记文件的绝对路径（给"用外部编辑器打开"按钮用）。 */
-	public synchronized Optional<Path> pathOf(UUID id) {
+	public Optional<Path> pathOf(UUID id) {
 		return find(id).map(note -> root.resolve(note.relativePath()));
 	}
 
@@ -448,7 +559,13 @@ public final class Vault {
 							}
 						}
 						// 只更新这一篇的卡片，不整库重扫：保存可能很频繁，整库扫描会被刷成拒绝服务
-						updateIndex(summarize(id, note.relativePath(), FrontMatter.parse(written)), modifiedTime(file));
+						FrontMatter.Parsed saved = FrontMatter.parse(written);
+						NoteSummary fresh2 = summarize(id, note.relativePath(), saved);
+						long[] stat = stat(file);
+						updateIndex(fresh2, stat == null ? -1 : stat[0]);
+						if (stat != null) {
+							remember(new Cached(note.relativePath(), stat[0], stat[1], fresh2, saved.body()));
+						}
 						return WriteResult.OK;
 					}
 				}
@@ -567,8 +684,10 @@ public final class Vault {
 		} finally {
 			Files.deleteIfExists(temporary);
 		}
-		scan();
-		return find(id).orElseThrow(() -> new IOException("新笔记未能加入索引"));
+		// 只把这一篇加进索引（整库重扫在笔记多的时候要好几秒）
+		NoteSummary created = summarize(id, relativePath(file), FrontMatter.parse(text));
+		updateIndex(created, modifiedTime(file));
+		return created;
 	}
 
 	/**
@@ -599,8 +718,12 @@ public final class Vault {
 			source = temporary;
 		}
 		Files.move(source, target);
-		scan();
-		return find(id).orElseThrow(() -> new IOException("改名后的笔记未能加入索引"));
+		// 只改这一篇的卡片：加密笔记的标题就是文件名，要按新文件重新做一张
+		uncache(id);
+		FrontMatter.Parsed parsed = FrontMatter.parse(Files.readString(target, StandardCharsets.UTF_8));
+		NoteSummary renamed = summarize(id, relativePath(target), parsed);
+		updateIndex(renamed, modifiedTime(target));
+		return renamed;
 	}
 
 	/**
@@ -624,7 +747,13 @@ public final class Vault {
 		}
 		Files.createDirectories(target.getParent());
 		Files.move(source, target);
-		scan();
+		// 只去掉挪走的那些（一篇，或者文件夹里的全部）
+		String moved = relativePath(source);
+		for (NoteSummary note : List.copyOf(index.values())) {
+			if (note.relativePath().equals(moved) || note.relativePath().startsWith(moved + "/")) {
+				removeFromIndex(note.id());
+			}
+		}
 		return root.relativize(target).toString().replace('\\', '/');
 	}
 
@@ -666,6 +795,7 @@ public final class Vault {
 							written = FrontMatter.withField(written, field.getKey(), field.getValue());
 						}
 						writeAtomically(file, written);
+						uncache(id);
 						updateIndex(summarize(id, note.relativePath(), FrontMatter.parse(written)), modifiedTime(file));
 						return WriteResult.OK;
 					}

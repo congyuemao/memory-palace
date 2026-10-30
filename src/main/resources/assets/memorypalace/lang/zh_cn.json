@@ -365,5 +365,11 @@
 	"screen.memorypalace.backup_restoring": "正在恢复，请稍候。",
 	"screen.memorypalace.backup_restored_short": "恢复已完成。恢复前的内容已另存为一份新备份。",
 	"message.memorypalace.backup_restored": "笔记库已恢复到 %s 时的状态，共写回 %s 个文件。被替换或多出的 %s 个文件已移到 %s。",
-	"message.memorypalace.backup_restore_failed": "恢复失败。有关详细信息，请查看游戏日志。"
+	"message.memorypalace.backup_restore_failed": "恢复失败。有关详细信息，请查看游戏日志。",
+	"message.memorypalace.link_not_found": "找不到链接指向的笔记：%s",
+	"command.memorypalace.backlinks_none": "没有笔记链接到“%s”。",
+	"command.memorypalace.backlinks_header": "以下 %s 篇笔记链接到“%s”（单击即可打开）：",
+	"command.memorypalace.backlinks_open": "单击打开这篇笔记",
+	"command.memorypalace.backlinks_more": "  另有 %s 篇未列出。",
+	"screen.memorypalace.link_open_external": "在浏览器中打开：%s"
 }

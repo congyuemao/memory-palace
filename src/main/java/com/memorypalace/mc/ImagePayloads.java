@@ -182,7 +182,7 @@ public final class ImagePayloads {
 
 	// 文件夹在哪个玩家的个人区里就返回 "players/<UUID>"，不在个人区里返回 ""（根目录）
 	private static String personalArea(String folder) {
-		String prefix = PalaceCommands.PLAYERS_FOLDER + "/";
+		String prefix = CommandSupport.PLAYERS_FOLDER + "/";
 		if (!folder.startsWith(prefix)) {
 			return "";
 		}

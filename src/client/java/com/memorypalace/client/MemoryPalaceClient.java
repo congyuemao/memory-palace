@@ -7,7 +7,7 @@ import com.memorypalace.client.crypto.NoteSaver;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.core.render.MathRenderer;
 import com.memorypalace.mc.EditPayloads;
-import com.memorypalace.mc.ToolPayloads;
+import com.memorypalace.mc.CapturePayloads;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -53,7 +53,7 @@ public class MemoryPalaceClient implements ClientModInitializer {
 		// 保存结果交给发起保存的那一方；/palace new 之后直接打开编辑器
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.SaveResult.TYPE, (payload, context) -> NoteSaver.onResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) -> CryptoClient.openEditor(payload));
-		ClientPlayNetworking.registerGlobalReceiver(ToolPayloads.CaptureResult.TYPE, (payload, context) -> InboxCapture.onResult(payload));
+		ClientPlayNetworking.registerGlobalReceiver(CapturePayloads.CaptureResult.TYPE, (payload, context) -> InboxCapture.onResult(payload));
 
 		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
 		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));

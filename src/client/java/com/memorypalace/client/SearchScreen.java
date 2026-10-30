@@ -1,6 +1,6 @@
 package com.memorypalace.client;
 
-import com.memorypalace.mc.ToolPayloads;
+import com.memorypalace.mc.SearchPayloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -25,7 +25,7 @@ public class SearchScreen extends Screen {
 
 	private EditBox input;
 	private String query = "";
-	private List<ToolPayloads.Entry> results = List.of();
+	private List<SearchPayloads.Entry> results = List.of();
 	private boolean searched;
 	private boolean pending;
 	private long lastEdit;
@@ -36,7 +36,7 @@ public class SearchScreen extends Screen {
 	}
 
 	static void register() {
-		ClientPlayNetworking.registerGlobalReceiver(ToolPayloads.Results.TYPE, (payload, context) -> {
+		ClientPlayNetworking.registerGlobalReceiver(SearchPayloads.Results.TYPE, (payload, context) -> {
 			if (open != null && payload.requestId() == open.latestRequest) {
 				open.results = payload.entries();
 				open.searched = true;
@@ -76,7 +76,7 @@ public class SearchScreen extends Screen {
 		int y = 54;
 		int maxRows = Math.max(1, (this.height - y - 8) / ROW);
 		for (int i = 0; i < Math.min(maxRows, results.size()); i++) {
-			ToolPayloads.Entry e = results.get(i);
+			SearchPayloads.Entry e = results.get(i);
 			Button main = addRenderableWidget(Button.builder(rowLabel(e), b -> choose(e))
 					.bounds(left, y, mainW, 20).build());
 			main.setTooltip(Tooltip.create(tooltip(e)));
@@ -97,7 +97,7 @@ public class SearchScreen extends Screen {
 	}
 
 	/** 一行：标题（文件夹）· 位置（或"尚未放到书架上"）。带上文件夹，同名笔记才分得清。 */
-	private Component rowLabel(ToolPayloads.Entry e) {
+	private Component rowLabel(SearchPayloads.Entry e) {
 		Component where = e.located()
 				? Component.translatable("screen.memorypalace.search_where", Navigator.dimensionName(e.dimension()),
 						e.pos().getX(), e.pos().getY(), e.pos().getZ(), slotName(e.slot()))
@@ -115,13 +115,13 @@ public class SearchScreen extends Screen {
 	}
 
 	/** 鼠标悬停：完整路径，加上正文里命中的那一段。 */
-	private static Component tooltip(ToolPayloads.Entry e) {
+	private static Component tooltip(SearchPayloads.Entry e) {
 		Component path = Component.literal(e.path());
 		return e.snippet().isEmpty() ? path : path.copy().append("\n").append(Component.literal(e.snippet()));
 	}
 
 	/** 点一行：有位置就导航过去，没有就直接打开。 */
-	private void choose(ToolPayloads.Entry e) {
+	private void choose(SearchPayloads.Entry e) {
 		if (e.located()) {
 			Navigator.start(e.dimension(), e.pos(), e.title());
 			onClose();
@@ -130,12 +130,12 @@ public class SearchScreen extends Screen {
 		}
 	}
 
-	private void openNote(ToolPayloads.Entry e) {
-		ClientPlayNetworking.send(new ToolPayloads.OpenById(e.id()));
+	private void openNote(SearchPayloads.Entry e) {
+		ClientPlayNetworking.send(new SearchPayloads.OpenById(e.id()));
 		onClose();
 	}
 
-	private void teleport(ToolPayloads.Entry e) {
+	private void teleport(SearchPayloads.Entry e) {
 		// 命令以 "/" 开头，sendCommand 不要这个斜杠；没有权限时服务端会拒绝
 		Minecraft mc = Minecraft.getInstance();
 		mc.player.connection.sendCommand(e.teleport().substring(1));
@@ -154,7 +154,7 @@ public class SearchScreen extends Screen {
 				rebuildWidgets();
 			} else {
 				latestRequest = ++requestCounter;
-				ClientPlayNetworking.send(new ToolPayloads.Search(latestRequest, query));
+				ClientPlayNetworking.send(new SearchPayloads.Search(latestRequest, query));
 			}
 		}
 	}

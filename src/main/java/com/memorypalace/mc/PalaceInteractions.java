@@ -226,6 +226,11 @@ public final class PalaceInteractions {
 		localItemUse = new LocalItemUse(kind, noteId, System.nanoTime());
 	}
 
+	/** 客户端用：玩家刚从合成结果栏取出了抄 source 这篇的抄本（和右键抄本一样，之后只认抄这一篇的"按新笔记加密"）。 */
+	public static void markLocalCraft(UUID source) {
+		markLocalItemUse(ItemUse.COPY, source);
+	}
+
 	/**
 	 * 客户端用：玩家是不是在 withinNanos 之内亲手右键过 kinds 里的某种物品（noteId 不为 null 时还要是这一篇）。
 	 * 不管对不对得上都用掉（一次右键只换一次服务端请求）。

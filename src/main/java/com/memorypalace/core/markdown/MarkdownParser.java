@@ -31,6 +31,8 @@ public final class MarkdownParser {
 	 * - 相邻的同样式文字合并成一个 MdSpan；空文字的 span 不输出
 	 * - 软换行和硬换行都变成 "\n"（跟 Obsidian 默认显示一致：写在下一行就显示在下一行）
 	 * - 加粗/斜体/删除线/行内代码/链接可以嵌套，样式按位叠加；链接里的文字带 link
+	 * - Obsidian 的笔记链接 [[笔记名]]、[[笔记名|显示文字]]、[[笔记名#标题]]：显示文字（没写就显示笔记名），
+	 *   link 是 "wiki:" + 笔记名（含 #标题，见 NoteLinks）。行内代码、公式里的不算；前面紧挨着 "!" 的是图片，不算
 	 * - 行内公式：普通文字里的 $...$，内容非空、不以空格开头或结尾；"\$" 表示字面的 $（转义后不算公式）。
 	 *   行内代码里的 $ 不算公式
 	 * - 块级公式：一个段落去掉两端空白后以 $$ 开头、以 $$ 结尾（可以跨多行）→ MdBlock.Math
@@ -235,7 +237,63 @@ public final class MarkdownParser {
 	private static List<MdSpan> spans(Node parent) {
 		var result = new ArrayList<MdSpan>();
 		readInlines(parent, 0, null, result);
-		return List.copyOf(result);
+		return withWikiLinks(result);
+	}
+
+	// [[目标]] 或 [[目标|显示文字]]；目标里不能有方括号、竖线、换行
+	private static final java.util.regex.Pattern WIKI_LINK =
+			java.util.regex.Pattern.compile("(?<!!)\\[\\[([^\\[\\]|\\n]+)(?:\\|([^\\[\\]\\n]*))?\\]\\]");
+
+	/** 普通文字里的 [[…]] 拆成链接 span。commonmark 不认这种写法，会把它原样留在文字里。 */
+	private static List<MdSpan> withWikiLinks(List<MdSpan> spans) {
+		var out = new ArrayList<MdSpan>();
+		for (MdSpan span : spans) {
+			if (span.link() != null || span.has(MdSpan.CODE) || span.has(MdSpan.MATH) || !span.text().contains("[[")) {
+				out.add(span);
+				continue;
+			}
+			var m = WIKI_LINK.matcher(span.text());
+			int last = 0;
+			while (m.find()) {
+				String target = m.group(1).strip();
+				if (target.isEmpty()) {
+					continue;
+				}
+				if (m.start() > last) {
+					out.add(new MdSpan(span.text().substring(last, m.start()), span.styles(), null));
+				}
+				String shown = m.group(2) != null && !m.group(2).isBlank() ? m.group(2).strip() : target;
+				out.add(new MdSpan(shown, span.styles(), "wiki:" + target));
+				last = m.end();
+			}
+			if (last < span.text().length()) {
+				out.add(new MdSpan(span.text().substring(last), span.styles(), null));
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	/** 正文里所有链接的 link（按出现顺序，可能重复）：标题、段落、列表、引用、表格里的都算。永远不抛异常。 */
+	public static List<String> links(String markdown) {
+		var out = new ArrayList<String>();
+		for (MdBlock block : parse(markdown)) {
+			List<List<MdSpan>> groups = switch (block) {
+				case MdBlock.Heading h -> List.of(h.spans());
+				case MdBlock.Paragraph p -> List.of(p.spans());
+				case MdBlock.ListItem item -> List.of(item.spans());
+				case MdBlock.Quote q -> List.of(q.spans());
+				case MdBlock.Table t -> t.rows().stream().flatMap(List::stream).toList();
+				default -> List.of();
+			};
+			for (List<MdSpan> spans : groups) {
+				for (MdSpan span : spans) {
+					if (span.link() != null && (out.isEmpty() || !out.getLast().equals(span.link()))) {
+						out.add(span.link());
+					}
+				}
+			}
+		}
+		return out;
 	}
 
 	private static void readInlines(Node parent, int styles, String link, List<MdSpan> result) {

@@ -307,6 +307,9 @@ public final class PalaceServer {
 				- /palace rename "新名字" 笔记名：给笔记改名
 				- /palace delete 笔记或文件夹：删除（移进 .palace/trash 回收站，可以找回）
 				- /palace history 笔记名：查看、还原历史版本
+				- /palace backlinks 笔记名：列出链接到这篇的笔记
+
+				在笔记里写 [[另一篇笔记]]，阅读时单击即可跳转。
 
 				每次进入世界时，笔记库会自动备份至 .minecraft/memory-palace-backups/。
 				""", StandardCharsets.UTF_8);

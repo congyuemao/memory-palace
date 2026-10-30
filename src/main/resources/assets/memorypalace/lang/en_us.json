@@ -365,5 +365,11 @@
 	"screen.memorypalace.backup_restoring": "Restoring. Please wait.",
 	"screen.memorypalace.backup_restored_short": "Restore complete. The notes as they were before the restore were saved as a new backup.",
 	"message.memorypalace.backup_restored": "Your notes were restored to how they were at %s; %s files were written back. %s replaced or extra files were moved to %s.",
-	"message.memorypalace.backup_restore_failed": "Restore failed. For details, see the game log."
+	"message.memorypalace.backup_restore_failed": "Restore failed. For details, see the game log.",
+	"message.memorypalace.link_not_found": "The linked note could not be found: %s",
+	"command.memorypalace.backlinks_none": "No notes link to \"%s\".",
+	"command.memorypalace.backlinks_header": "%s notes link to \"%s\" (click to open):",
+	"command.memorypalace.backlinks_open": "Click to open this note",
+	"command.memorypalace.backlinks_more": "  %s more not shown.",
+	"screen.memorypalace.link_open_external": "Open in browser: %s"
 }

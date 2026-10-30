@@ -193,7 +193,7 @@ public final class FolderPayloads {
 				if (read.isEmpty() || !NoteAccess.isOwner(read.get().note().access(), who)) {
 					continue;
 				}
-				if (CryptoPayloads.sendAction(player, note.id(), "decrypt_folder", note.title(), read.get().body())) {
+				if (CryptoPayloads.sendAction(player, note.id(), CryptoAction.DECRYPT_FOLDER, note.title(), read.get().body())) {
 					sent++;
 				} else {
 					tooLong++;
@@ -202,7 +202,7 @@ public final class FolderPayloads {
 			if (tooLong > 0) {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.folder_too_long", tooLong, CryptoPayloads.MAX_ACTION_BODY));
 			}
-			CryptoPayloads.sendAction(player, new UUID(0, 0), "decrypt_folder_done", folder, Integer.toString(sent));
+			CryptoPayloads.sendAction(player, new UUID(0, 0), CryptoAction.DECRYPT_FOLDER_DONE, folder, Integer.toString(sent));
 		} catch (IOException | IllegalArgumentException e) {
 			MemoryPalace.LOGGER.error("解除文件夹密码失败：{}", folder, e);
 		}
@@ -362,7 +362,7 @@ public final class FolderPayloads {
 				if (NoteEnvelope.isEnvelope(body) && NoteEnvelope.locks(body).contains(lock)) {
 					continue; // 已经用这把文件夹钥匙加密过了
 				}
-				if (CryptoPayloads.sendAction(player, note.id(), "encrypt_folder", note.title(), body)) {
+				if (CryptoPayloads.sendAction(player, note.id(), CryptoAction.ENCRYPT_FOLDER, note.title(), body)) {
 					sent++;
 				} else {
 					tooLong++;
@@ -372,7 +372,7 @@ public final class FolderPayloads {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.folder_too_long", tooLong, CryptoPayloads.MAX_ACTION_BODY));
 			}
 			// 告诉客户端发完了、一共几篇：客户端逐篇存好（受保存限速，会慢慢存）之后报告成功 / 失败 / 未处理各几篇
-			CryptoPayloads.sendAction(player, new UUID(0, 0), "encrypt_folder_done", folder, Integer.toString(sent));
+			CryptoPayloads.sendAction(player, new UUID(0, 0), CryptoAction.ENCRYPT_FOLDER_DONE, folder, Integer.toString(sent));
 		} catch (IOException | IllegalArgumentException e) {
 			MemoryPalace.LOGGER.error("加密文件夹里的笔记失败：{}", folder, e);
 		}

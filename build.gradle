@@ -18,6 +18,13 @@ loom {
 			sourceSet sourceSets.client
 		}
 	}
+
+	// 开发用客户端固定玩家名：不固定的话每次启动随机起名，进世界就是另一个玩家（背包是空的）
+	runs {
+		client {
+			programArgs "--username", "Player766"
+		}
+	}
 }
 
 dependencies {
@@ -65,6 +72,11 @@ dependencies {
 
 test {
 	useJUnitPlatform()
+	// 性能基准（VaultBenchmarkTest）平时不跑：-Dbenchmark=true 时才跑，结果打印到测试输出
+	systemProperty "benchmark", providers.systemProperty("benchmark").getOrElse("false")
+	testLogging {
+		showStandardStreams = providers.systemProperty("benchmark").getOrElse("false") == "true"
+	}
 }
 
 processResources {

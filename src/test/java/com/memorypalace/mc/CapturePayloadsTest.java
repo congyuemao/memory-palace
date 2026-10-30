@@ -21,15 +21,15 @@ class CapturePayloadsTest {
 	@Test
 	void roundTripKeepsIdAndRetry() {
 		RegistryFriendlyByteBuf buf = buffer();
-		ToolPayloads.Capture.CODEC.encode(buf, new ToolPayloads.Capture(ID, true, "去找钻石", TIME));
-		assertEquals(new ToolPayloads.Capture(ID, true, "去找钻石", TIME), ToolPayloads.Capture.CODEC.decode(buf));
+		CapturePayloads.Capture.CODEC.encode(buf, new CapturePayloads.Capture(ID, true, "去找钻石", TIME));
+		assertEquals(new CapturePayloads.Capture(ID, true, "去找钻石", TIME), CapturePayloads.Capture.CODEC.decode(buf));
 
 		RegistryFriendlyByteBuf sealed = buffer();
-		ToolPayloads.CaptureSealed.CODEC.encode(sealed, new ToolPayloads.CaptureSealed(ID, false, "MPALBOX1:虚构的密文", TIME));
-		assertEquals(new ToolPayloads.CaptureSealed(ID, false, "MPALBOX1:虚构的密文", TIME), ToolPayloads.CaptureSealed.CODEC.decode(sealed));
+		CapturePayloads.CaptureSealed.CODEC.encode(sealed, new CapturePayloads.CaptureSealed(ID, false, "MPALBOX1:虚构的密文", TIME));
+		assertEquals(new CapturePayloads.CaptureSealed(ID, false, "MPALBOX1:虚构的密文", TIME), CapturePayloads.CaptureSealed.CODEC.decode(sealed));
 
 		RegistryFriendlyByteBuf result = buffer();
-		ToolPayloads.CaptureResult.CODEC.encode(result, new ToolPayloads.CaptureResult(ID, "OK", "收件箱/2026-10-30.md"));
-		assertEquals(new ToolPayloads.CaptureResult(ID, "OK", "收件箱/2026-10-30.md"), ToolPayloads.CaptureResult.CODEC.decode(result));
+		CapturePayloads.CaptureResult.CODEC.encode(result, new CapturePayloads.CaptureResult(ID, "OK", "收件箱/2026-10-30.md"));
+		assertEquals(new CapturePayloads.CaptureResult(ID, "OK", "收件箱/2026-10-30.md"), CapturePayloads.CaptureResult.CODEC.decode(result));
 	}
 }

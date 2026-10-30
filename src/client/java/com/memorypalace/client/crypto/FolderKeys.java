@@ -82,7 +82,7 @@ public final class FolderKeys {
 				PasswordScreen.tell("message.memorypalace.folder_lock_mismatch");
 				return;
 			}
-			Minecraft.getInstance().gui.setScreen(PasswordScreen.unlockFolder(data.folder(), data.content(), returnTo, key -> {
+			Minecraft.getInstance().gui.setScreen(FolderPasswords.unlockFolder(data.folder(), data.content(), returnTo, key -> {
 				put(lockId, key);
 				then.run();
 			}));

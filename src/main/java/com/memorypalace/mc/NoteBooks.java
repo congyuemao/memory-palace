@@ -109,6 +109,14 @@ public final class NoteBooks {
 		}
 	}
 
+	/** stack 原地变成这篇笔记的笔记书（去掉原来的名字、说明，换上笔记书的内容、标记和贴图）。 */
+	public static void becomeBook(ItemStack stack, NoteSummary note) {
+		ItemStack book = create(note);
+		stack.applyComponents(net.minecraft.core.component.DataComponentPatch.builder()
+				.remove(DataComponents.ITEM_NAME).remove(DataComponents.LORE).build());
+		stack.applyComponents(book.getComponentsPatch());
+	}
+
 	/** 这本书对应的笔记 ID；不是笔记书时为 empty。 */
 	public static Optional<UUID> idOf(ItemStack stack) {
 		if (stack.isEmpty()) {

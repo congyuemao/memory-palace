@@ -20,6 +20,12 @@ import java.util.function.Predicate;
 public final class NoteSearch {
 	private NoteSearch() {}
 
+	// 正文 → 能搜的小写文字：Vault 对没变的笔记返回同一个正文对象，按对象相同判断还能不能用
+	private record Folded(String body, String searchable, String folded) {}
+
+	private static final java.util.Map<java.util.UUID, Folded> FOLDED = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final int MAX_FOLDED = 20_000;
+
 	/**
 	 * 一条结果。
 	 * @param snippet 正文里命中的那一小段（单行，前后各约 20 个字，前后被截断时加"…"）；只在标题和路径都没命中、
@@ -70,8 +76,9 @@ public final class NoteSearch {
 					metadataMatch = true;
 				} else {
 					if (body == null) {
-						body = readSearchableBody(vault, note);
-						foldedBody = body.toLowerCase(Locale.ROOT);
+						Folded f = searchable(vault, note);
+						body = f.searchable();
+						foldedBody = f.folded();
 					}
 					if (!foldedBody.contains(term)) {
 						matches = false;
@@ -91,24 +98,43 @@ public final class NoteSearch {
 				.thenComparing(hit -> hit.note().relativePath())).limit(limit).toList();
 	}
 
-	private static String readSearchableBody(Vault vault, NoteSummary note) {
-		synchronized (vault) {
-			if (note.encrypted() || vault.find(note.id()).map(NoteSummary::encrypted).orElse(true)) {
-				return "";
-			}
-			try {
-				String body = vault.readBody(note.id()).orElse("");
-				// 外部编辑可能让索引过期，密文仍不能参与匹配或片段生成。
-				if (NoteCipher.isEncrypted(body) || NoteEnvelope.isEnvelope(body)) {
-					return "";
-				}
-				// 收件箱里客户端加密的随手记（MPALBOX1 行）：服务端解不开，去掉，不拿乱码去匹配
-				return InboxCipher.hasSealedLines(body)
-						? String.join("\n", body.lines().filter(line -> !InboxCipher.isSealed(line)).toList()) : body;
-			} catch (IOException e) {
-				return "";
-			}
+	private static final Folded NOTHING = new Folded(null, "", "");
+
+	/** 这篇能拿来搜的正文和它的小写版本；加密笔记、读不了的为空。 */
+	private static Folded searchable(Vault vault, NoteSummary note) {
+		if (note.encrypted()) {
+			return NOTHING;
 		}
+		String body;
+		try {
+			// readNote 按文件此刻的内容判断加密状态（外部编辑可能让索引过期，密文不能参与匹配或片段生成）
+			var read = vault.readNote(note.id());
+			if (read.isEmpty() || read.get().note().encrypted()) {
+				return NOTHING;
+			}
+			body = read.get().body();
+		} catch (IOException e) {
+			return NOTHING;
+		}
+		Folded cached = FOLDED.get(note.id());
+		if (cached != null && cached.body() == body) {
+			return cached;
+		}
+		String searchable;
+		if (NoteCipher.isEncrypted(body) || NoteEnvelope.isEnvelope(body)) {
+			searchable = "";
+		} else if (InboxCipher.hasSealedLines(body)) {
+			// 收件箱里客户端加密的随手记（MPALBOX1 行）：服务端解不开，去掉，不拿乱码去匹配
+			searchable = String.join("\n", body.lines().filter(line -> !InboxCipher.isSealed(line)).toList());
+		} else {
+			searchable = body;
+		}
+		Folded fresh = new Folded(body, searchable, searchable.toLowerCase(Locale.ROOT));
+		if (FOLDED.size() > MAX_FOLDED) {
+			FOLDED.clear();
+		}
+		FOLDED.put(note.id(), fresh);
+		return fresh;
 	}
 
 	private static String snippet(String body, String term) {

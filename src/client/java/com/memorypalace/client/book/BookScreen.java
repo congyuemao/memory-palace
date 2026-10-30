@@ -16,6 +16,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.BookViewScreen;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
 
 import java.util.List;
 import java.util.UUID;
@@ -350,6 +351,52 @@ public abstract class BookScreen extends Screen {
 			y += line.height();
 		}
 		graphics.pose().popMatrix();
+	}
+
+	/**
+	 * 鼠标在这一页（画在 screenX 处）的哪个链接上；不在链接上时为 null。和 drawPage 用同样的位置换算。
+	 */
+	protected String linkAt(List<BookLine> page, int screenX, double mouseX, double mouseY) {
+		float x = (float) ((mouseX - screenX) / fontScale);
+		float y = (float) ((mouseY - (top + TEXT_TOP)) / fontScale);
+		if (x < 0 || y < 0) {
+			return null;
+		}
+		int lineY = 0;
+		for (BookLine line : page) {
+			if (y >= lineY && y < lineY + line.height()) {
+				for (BookLayout.Seg seg : line.segs()) {
+					if (seg instanceof BookLayout.TextSeg t && y >= lineY + t.y() - 1 && y < lineY + t.y() + this.font.lineHeight) {
+						String link = BookLayout.linkOf(styleAt(t.text(), x - t.x()));
+						if (link != null) {
+							return link;
+						}
+					}
+				}
+				return null;
+			}
+			lineY += line.height();
+		}
+		return null;
+	}
+
+	/** 一行字里横坐标 x 处那个字的样式；在字的范围外为 null。 */
+	private Style styleAt(net.minecraft.util.FormattedCharSequence text, float x) {
+		if (x < 0) {
+			return null;
+		}
+		float[] left = {0};
+		Style[] hit = {null};
+		text.accept((index, style, codepoint) -> {
+			float width = this.font.width(net.minecraft.util.FormattedCharSequence.codepoint(codepoint, style));
+			if (x < left[0] + width) {
+				hit[0] = style;
+				return false;
+			}
+			left[0] += width;
+			return true;
+		});
+		return hit[0];
 	}
 
 	/** 画公式/图片：缩到"1 贴图像素 = 1 屏幕像素"再画，保证清晰。 */

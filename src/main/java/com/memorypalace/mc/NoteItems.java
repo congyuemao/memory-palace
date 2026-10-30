@@ -76,13 +76,19 @@ public final class NoteItems {
 	 * 自动抄不了的（加密笔记要客户端重新加密、抄进上锁的文件夹、没权限）去掉标记，留着右键抄。
 	 */
 	public static ItemStack copyBlank(UUID source) {
+		return copyBlank(source, null);
+	}
+
+	/** 同上；sourceTitle（原书的书名）不为空时，合成结果栏里显示成"原书名 抄本"。 */
+	public static ItemStack copyBlank(UUID source, String sourceTitle) {
 		ItemStack stack = blank(false);
 		update(stack, data -> {
 			data.putString("copy_of", source.toString());
 			data.putBoolean("auto_copy", true);
 		});
-		stack.set(DataComponents.ITEM_NAME, Component.literal("记忆笔记抄本（空白）"));
-		stack.set(DataComponents.LORE, lore("放进背包后自动抄成一篇独立的新笔记", "（加密笔记要右键抄写；只有读得了原笔记的人能抄）"));
+		stack.set(DataComponents.ITEM_NAME, Component.literal(sourceTitle == null || sourceTitle.isBlank()
+				? "记忆笔记抄本" : sourceTitle + " 抄本"));
+		stack.set(DataComponents.LORE, lore("取出后即抄写为一篇独立的新笔记", "（加密笔记取出后需右键完成抄写；只有能阅读原笔记的人才能抄写）"));
 		return stack;
 	}
 

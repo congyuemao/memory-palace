@@ -81,7 +81,7 @@ public final class ReadPasswords {
 	}
 
 	private static void ask(UUID id, String challenge, Component status) {
-		PasswordScreen s = PasswordScreen.readPassword(status, password -> NoteEnvelope.passwordKeys(challenge, password),
+		PasswordScreen s = ReadPasswordPrompts.readPassword(status, password -> NoteEnvelope.passwordKeys(challenge, password),
 				keys -> {
 					cancel(id);
 					ClientKeys.touch(); // 开始算闲置自动上锁（之前可能从没解锁过任何东西）

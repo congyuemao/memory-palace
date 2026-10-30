@@ -130,7 +130,10 @@ public final class NoteRecipes {
 
 		@Override
 		public ItemStack assemble(CraftingInput input) {
-			return NoteBooks.idOf(find(input, NoteRecipes::bound)).map(NoteItems::copyBlank).orElse(ItemStack.EMPTY);
+			ItemStack source = find(input, NoteRecipes::bound);
+			var content = source.get(net.minecraft.core.component.DataComponents.WRITTEN_BOOK_CONTENT);
+			String title = content == null ? null : content.title().raw();
+			return NoteBooks.idOf(source).map(id -> NoteItems.copyBlank(id, title)).orElse(ItemStack.EMPTY);
 		}
 
 		/** 原来的笔记书留下（和原版复制成书一样）。 */

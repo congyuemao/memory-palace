@@ -30,7 +30,7 @@ import java.util.UUID;
  * - 待上锁的笔记书：作者右键时让客户端加密这篇（和 /palace encrypt 一样）
  * 客户端那边，这些"服务端让我加密 / 打开编辑器"的请求只在玩家刚右键过这本书时才认（见 PalaceInteractions.takeLocalItemUse）。
  */
-final class NoteItemUse {
+public final class NoteItemUse {
 	private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss", Locale.ROOT);
 	private static final int MAX_TRIES = 20;
 
@@ -63,19 +63,32 @@ final class NoteItemUse {
 		}
 		boolean secret = NoteItems.isBlankLocked(stack);
 		String name = "记忆笔记/" + LocalDateTime.now().format(STAMP);
-		Optional<PalaceCommands.Created> created = PalaceCommands.createNote(player, name, "", secret, player::sendSystemMessage);
+		Optional<NoteCommands.Created> created = NoteCommands.createNote(player, name, "", secret, player::sendSystemMessage);
 		if (created.isEmpty()) {
 			return;
 		}
 		replace(player, stack, created.get().note());
-		PalaceCommands.openCreated(player, created.get(), secret);
+		NoteCommands.openCreated(player, created.get(), secret);
 	}
 
 	// 每这么多刻看一眼背包里有没有刚合成的抄本
 	private static final int AUTO_COPY_EVERY_TICKS = 10;
 	private static int autoCopyTicks;
 
-	/** 每刻调用（NoteRecipes.register 里注册）：把背包里刚合成的抄本自动抄好。 */
+	/**
+	 * 从合成结果栏取出抄本的那一刻（见 mixin.ItemCraftMixin）：当场抄好，手里这本直接变成新笔记的书。
+	 * 原本留在合成格里（NoteRecipes.CopyNote.getRemainingItems），空白本被用掉。
+	 */
+	public static void onCrafted(ServerPlayer player, ItemStack stack) {
+		if (!stack.isEmpty() && NoteItems.autoCopy(stack)) {
+			autoCopy(player, stack, true);
+		}
+	}
+
+	/**
+	 * 每刻调用（NoteRecipes.register 里注册）：兜底。在背包的 2×2 合成格里按 Shift 取出时，原版先把物品挪进背包
+	 * 才通知"合成了"，那时手里的已经是空的，改不到；挪进背包的那本由这里转成新笔记的书。
+	 */
 	static void tick(net.minecraft.server.MinecraftServer server) {
 		if (++autoCopyTicks % AUTO_COPY_EVERY_TICKS != 0) {
 			return;
@@ -85,7 +98,7 @@ final class NoteItemUse {
 			for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
 				ItemStack stack = inventory.getItem(slot);
 				if (NoteItems.autoCopy(stack)) {
-					autoCopy(player, stack);
+					autoCopy(player, stack, false);
 				}
 			}
 		}
@@ -96,21 +109,29 @@ final class NoteItemUse {
 	 * 加密笔记（要客户端解开再用新 ID 加密）、抄进上锁的文件夹（要文件夹密码）不自动做，免得在合成界面里突然弹密码框；
 	 * 这些和抄失败的（没权限、篇数满了……）都去掉自动标记、提示一次，留着右键抄。一叠有好几本时每次抄一本。
 	 */
-	private static void autoCopy(ServerPlayer player, ItemStack stack) {
+	private static void autoCopy(ServerPlayer player, ItemStack stack, boolean inPlace) {
 		UUID sourceId = NoteItems.copyOf(stack).orElseThrow();
 		Vault vault = PalaceServer.vault();
-		boolean plain = vault != null && vault.find(sourceId).filter(n -> !n.encrypted()).isPresent()
+		// 加密笔记只在"刚从合成结果栏取出"时当场抄（客户端那边记着这次合成，见 PalaceInteractions.markLocalCraft）；
+		// 兜底时（背包 2×2 合成格里按 Shift 取出）客户端认不出是谁要的，留着右键抄
+		boolean ok = vault != null && vault.find(sourceId).filter(n -> inPlace || !n.encrypted()).isPresent()
 				&& !targetLocked(vault, player) && NoteItems.copyJob(stack).isEmpty();
-		if (!plain) {
+		if (!ok) {
 			NoteItems.clearAutoCopy(stack);
 			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_right_click"));
 			return;
 		}
 		int before = stack.getCount();
-		copy(player, stack, sourceId);
-		if (stack.getCount() == before) {
+		copy(player, stack, sourceId, inPlace);
+		if (stack.getCount() == before && NoteItems.copyOf(stack).isPresent()) {
 			NoteItems.clearAutoCopy(stack); // 没抄成（原因 copy 已经说了）：留着右键再试
 		}
+	}
+
+	/** 这本抄本原地变成新笔记的笔记书（合成结果栏里刚取出的那本）。 */
+	private static void becomeCopy(ServerPlayer player, ItemStack stack, NoteSummary note) {
+		NoteBooks.becomeBook(stack, note);
+		player.sendSystemMessage(Component.translatable("message.memorypalace.copy_done", note.relativePath()));
 	}
 
 	/** 这本空白笔记用掉一本（创造模式不用掉），换成新笔记的笔记书。 */
@@ -121,6 +142,11 @@ final class NoteItemUse {
 	}
 
 	private static void copy(ServerPlayer player, ItemStack stack, UUID sourceId) {
+		copy(player, stack, sourceId, false);
+	}
+
+	/** inPlace：抄好后手里这本原地变成新笔记的书（合成结果栏里刚取出的），否则用掉一本、另给一本。 */
+	private static void copy(ServerPlayer player, ItemStack stack, UUID sourceId, boolean inPlace) {
 		Vault vault = PalaceServer.vault();
 		if (vault == null) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.no_vault"));
@@ -182,7 +208,7 @@ final class NoteItemUse {
 			String base = "抄本/" + file.substring(0, file.length() - 3) + " 抄本";
 			String name = freeName(vault, player, base);
 			// 加密笔记先建一篇空的（默认标题），内容等客户端加密好再存；被锁的文件夹里 createNote 也只建空的
-			Optional<PalaceCommands.Created> created = PalaceCommands.createNote(player, name, encrypted ? "" : body, false,
+			Optional<NoteCommands.Created> created = NoteCommands.createNote(player, name, encrypted ? "" : body, false,
 					player::sendSystemMessage);
 			if (created.isEmpty()) {
 				return;
@@ -201,10 +227,14 @@ final class NoteItemUse {
 				NoteItems.setCopyJob(stack, job.id());
 				sendFolderCopy(player, note, sourceId, placeholderHash, body);
 			} else {
-				replace(player, stack, note);
+				if (inPlace) {
+					becomeCopy(player, stack, note);
+				} else {
+					replace(player, stack, note);
+				}
 				if (encrypted) {
 					// "原笔记ID:原密文"：客户端用自己的钥匙解开原笔记（密文绑定原 ID），再按新笔记的 ID 加密
-					CryptoPayloads.sendAction(player, note.id(), "copy_encrypted", note.title(), sourceId + ":" + body);
+					CryptoPayloads.sendAction(player, note.id(), CryptoAction.COPY_ENCRYPTED, note.title(), sourceId + ":" + body);
 				}
 			}
 			MemoryPalace.LOGGER.info("{} 抄写了笔记 {} → {}", player.getName().getString(), sourceNote.relativePath(), note.relativePath());
@@ -215,7 +245,7 @@ final class NoteItemUse {
 
 	/** 把原笔记正文发给客户端，让它用目标文件夹的钥匙按目标 ID 加密后存进去（保存时核对占位正文的指纹）。 */
 	private static void sendFolderCopy(ServerPlayer player, NoteSummary target, UUID sourceId, String placeholderHash, String body) {
-		if (CryptoPayloads.sendAction(player, target.id(), "copy_into_folder", target.title(), FolderCopy.pack(sourceId, placeholderHash, body))) {
+		if (CryptoPayloads.sendAction(player, target.id(), CryptoAction.COPY_INTO_FOLDER, target.title(), FolderCopy.pack(sourceId, placeholderHash, body))) {
 			player.sendSystemMessage(Component.translatable("message.memorypalace.copy_encrypting", target.relativePath()));
 		} else {
 			player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
@@ -280,7 +310,7 @@ final class NoteItemUse {
 
 	/** 抄本会建在哪个文件夹（"抄本/"，普通玩家在自己的个人区里）现在是不是上了锁。 */
 	private static boolean targetLocked(Vault vault, ServerPlayer player) {
-		String folder = (PalaceAccess.admin(player) ? "" : PalaceCommands.personalFolder(player) + "/") + "抄本";
+		String folder = (PalaceAccess.admin(player) ? "" : CommandSupport.personalFolder(player) + "/") + "抄本";
 		try {
 			return FolderLocks.lockedFolder(vault, folder).isPresent();
 		} catch (IllegalArgumentException e) {
@@ -341,7 +371,7 @@ final class NoteItemUse {
 
 	// "抄本/xx 抄本" 已经有了就试 "xx 抄本 2"、"xx 抄本 3"……
 	private static String freeName(Vault vault, ServerPlayer player, String base) {
-		String prefix = PalaceAccess.admin(player) ? "" : PalaceCommands.personalFolder(player) + "/";
+		String prefix = PalaceAccess.admin(player) ? "" : CommandSupport.personalFolder(player) + "/";
 		for (int i = 1; i <= MAX_TRIES; i++) {
 			String name = i == 1 ? base : base + " " + i;
 			if (vault.resolve(prefix + name).isEmpty()) {
@@ -399,7 +429,7 @@ final class NoteItemUse {
 				return false;
 			}
 			NoteSummary note = read.get().note();
-			if (!CryptoPayloads.sendAction(player, id, "encrypt", note.title(), read.get().body())) {
+			if (!CryptoPayloads.sendAction(player, id, CryptoAction.ENCRYPT, note.title(), read.get().body())) {
 				player.sendSystemMessage(Component.translatable("command.memorypalace.crypto_too_long", CryptoPayloads.MAX_ACTION_BODY));
 				return false;
 			}

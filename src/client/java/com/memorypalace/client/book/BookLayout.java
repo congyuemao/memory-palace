@@ -28,6 +28,14 @@ public final class BookLayout {
 	static final int CODE = 0xFF1F4A2A;
 	public static final int MATH = 0xFF1A3A7A;
 	static final int LINK = 0xFF1A3AA0;
+	// 链接地址挂在文字样式的 insertion 上（书页里不会用到它），点击时按位置取回来（见 BookScreen.linkAt）
+	private static final String LINK_PREFIX = "memorypalace-link:";
+
+	/** 这段文字样式上挂的链接地址（MdSpan.link）；不是链接时为 null。 */
+	public static String linkOf(Style style) {
+		String insertion = style == null ? null : style.getInsertion();
+		return insertion != null && insertion.startsWith(LINK_PREFIX) ? insertion.substring(LINK_PREFIX.length()) : null;
+	}
 	static final int ERROR = 0xFFA02020;
 
 	private static final int INDENT = 8;
@@ -336,7 +344,7 @@ public final class BookLayout {
 			if (span.has(MdSpan.STRIKE)) style = style.withStrikethrough(true);
 			if (span.has(MdSpan.CODE)) style = style.withColor(CODE);
 			if (span.link() != null) {
-				style = style.withColor(LINK).withUnderlined(true);
+				style = style.withColor(LINK).withUnderlined(true).withInsertion(LINK_PREFIX + span.link());
 			}
 			out.add(new TextPiece(span.text(), style));
 		}

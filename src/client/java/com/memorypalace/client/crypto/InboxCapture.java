@@ -7,7 +7,7 @@ import com.memorypalace.core.crypto.InboxCipher;
 import com.memorypalace.core.crypto.KeyRing;
 import com.memorypalace.core.vault.CaptureOutbox;
 import com.memorypalace.core.vault.Inbox;
-import com.memorypalace.mc.ToolPayloads;
+import com.memorypalace.mc.CapturePayloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -117,7 +117,7 @@ public final class InboxCapture {
 	}
 
 	/** 服务端回了某条随手记的保存结果。 */
-	public static void onResult(ToolPayloads.CaptureResult result) {
+	public static void onResult(CapturePayloads.CaptureResult result) {
 		boolean ok = "OK".equals(result.status());
 		if (OUTBOX.onResult(result.requestId(), ok) == null) {
 			return;
@@ -129,7 +129,7 @@ public final class InboxCapture {
 		}
 	}
 
-	private static Component reason(ToolPayloads.CaptureResult result) {
+	private static Component reason(CapturePayloads.CaptureResult result) {
 		return switch (result.status()) {
 			case "ADMIN_ONLY" -> Component.translatable("message.memorypalace.admin_only");
 			case "MULTIPLAYER_OFF" -> Component.translatable("message.memorypalace.multiplayer_off");
@@ -205,8 +205,8 @@ public final class InboxCapture {
 		// 带上第一次按回车时的本地时间和时区："今天"按玩家所在地算（出国、跨日期变更线都对），重发也记进同一天
 		String time = draft.time().toString();
 		ClientPlayNetworking.send(draft.sealedLine() == null
-				? new ToolPayloads.Capture(draft.id(), retry, draft.text(), time)
-				: new ToolPayloads.CaptureSealed(draft.id(), retry, draft.sealedLine(), time));
+				? new CapturePayloads.Capture(draft.id(), retry, draft.text(), time)
+				: new CapturePayloads.CaptureSealed(draft.id(), retry, draft.sealedLine(), time));
 	}
 
 	private static void hint(String key) {

@@ -2,7 +2,6 @@ package com.memorypalace.client;
 
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.core.vault.VaultBackup;
-import com.memorypalace.mc.PalaceServer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.ConfirmScreen;
@@ -11,7 +10,6 @@ import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -77,14 +75,11 @@ public class BackupScreen extends Screen {
 
 	/** 读出当前世界的备份列表（新的在前）。 */
 	private void load() {
-		Path dir = PalaceServer.backupDir();
 		List<VaultBackup.Snapshot> list = new ArrayList<>();
-		if (dir != null) {
-			try {
-				list.addAll(VaultBackup.snapshots(dir));
-			} catch (IOException e) {
-				status = Component.translatable("screen.memorypalace.backups_unreadable");
-			}
+		try {
+			list.addAll(LocalVault.snapshots());
+		} catch (IOException e) {
+			status = Component.translatable("screen.memorypalace.backups_unreadable");
 		}
 		snapshots = list.reversed();
 		int pages = Math.max(1, (snapshots.size() + perPage() - 1) / perPage());
@@ -110,24 +105,23 @@ public class BackupScreen extends Screen {
 		busy = true;
 		status = Component.translatable("screen.memorypalace.backup_restoring");
 		rebuildWidgets();
-		PalaceServer.restoreBackup(snapshot.id(), result -> this.minecraft.execute(() -> {
+		LocalVault.restore(snapshot.id(), result -> {
 			busy = false;
 			// 钥匙圈可能换成了备份时的版本：先上锁，下次用到时按恢复后的钥匙圈重新解锁
 			ClientKeys.lock(false);
 			if (this.minecraft.player != null) {
 				this.minecraft.player.sendSystemMessage(Component.translatable("message.memorypalace.backup_restored",
 						shown(snapshot), result.written(), result.movedToTrash(),
-						PalaceServer.vault() == null ? result.trash().toString()
-								: PalaceServer.vault().root().relativize(result.trash()).toString().replace('\\', '/')));
+						LocalVault.relative(result.trash())));
 			}
 			status = Component.translatable("screen.memorypalace.backup_restored_short");
 			this.minecraft.gui.setScreen(this);
 			rebuildWidgets();
-		}), error -> this.minecraft.execute(() -> {
+		}, error -> {
 			busy = false;
 			status = Component.translatable("message.memorypalace.backup_restore_failed");
 			rebuildWidgets();
-		}));
+		});
 	}
 
 	@Override

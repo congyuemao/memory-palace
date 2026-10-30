@@ -2,7 +2,7 @@ package com.memorypalace.client;
 
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.vault.NoteLocations;
-import com.memorypalace.mc.ToolPayloads;
+import com.memorypalace.mc.LookPayloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
@@ -32,7 +32,7 @@ final class LookHud {
 	private LookHud() {}
 
 	static void register() {
-		ClientPlayNetworking.registerGlobalReceiver(ToolPayloads.LookInfo.TYPE, (info, context) -> {
+		ClientPlayNetworking.registerGlobalReceiver(LookPayloads.LookInfo.TYPE, (info, context) -> {
 			if (info.pos().equals(lookPos) && info.slot() == lookSlot) {
 				text = info.text();
 			}
@@ -80,7 +80,7 @@ final class LookHud {
 		}
 		if (changed || ++ticksSinceQuery >= REFRESH_TICKS) {
 			ticksSinceQuery = 0;
-			ClientPlayNetworking.send(new ToolPayloads.LookQuery(pos, slot));
+			ClientPlayNetworking.send(new LookPayloads.LookQuery(pos, slot));
 		}
 	}
 }
