@@ -28,6 +28,8 @@ public final class BookLayout {
 	static final int CODE = 0xFF1F4A2A;
 	public static final int MATH = 0xFF1A3A7A;
 	static final int LINK = 0xFF1A3AA0;
+	// 指向不存在笔记的链接（断链）：暗红，点了会问要不要新建
+	static final int BROKEN_LINK = 0xFF9A3A2A;
 	// 链接地址挂在文字样式的 insertion 上（书页里不会用到它），点击时按位置取回来（见 BookScreen.linkAt）
 	private static final String LINK_PREFIX = "memorypalace-link:";
 
@@ -63,6 +65,11 @@ public final class BookLayout {
 		Box image(String src);
 
 		String imagePlaceholder(String src, String alt);
+
+		/** 这个链接对应不上笔记（断链），换个颜色显示。 */
+		default boolean brokenLink(String link) {
+			return false;
+		}
 	}
 
 	/** 一行里的一段。x、y 是相对行左上角的位置。 */
@@ -344,7 +351,8 @@ public final class BookLayout {
 			if (span.has(MdSpan.STRIKE)) style = style.withStrikethrough(true);
 			if (span.has(MdSpan.CODE)) style = style.withColor(CODE);
 			if (span.link() != null) {
-				style = style.withColor(LINK).withUnderlined(true).withInsertion(LINK_PREFIX + span.link());
+				style = style.withColor(boxes.brokenLink(span.link()) ? BROKEN_LINK : LINK).withUnderlined(true)
+						.withInsertion(LINK_PREFIX + span.link());
 			}
 			out.add(new TextPiece(span.text(), style));
 		}

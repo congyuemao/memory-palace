@@ -54,6 +54,9 @@ public class MemoryPalaceClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.SaveResult.TYPE, (payload, context) -> NoteSaver.onResult(payload));
 		ClientPlayNetworking.registerGlobalReceiver(EditPayloads.OpenEditor.TYPE, (payload, context) -> CryptoClient.openEditor(payload));
 		ClientPlayNetworking.registerGlobalReceiver(CapturePayloads.CaptureResult.TYPE, (payload, context) -> InboxCapture.onResult(payload));
+		// 笔记链接：阅读界面的断链和反向链接、编辑器里 [[ 的补全
+		ClientPlayNetworking.registerGlobalReceiver(com.memorypalace.mc.LinkPayloads.Info.TYPE, (payload, context) -> NoteScreen.onLinkInfo(payload));
+		ClientPlayNetworking.registerGlobalReceiver(com.memorypalace.mc.LinkPayloads.Suggestions.TYPE, (payload, context) -> EditorScreen.onSuggestions(payload));
 
 		// JLaTeXMath 第一次用要加载字体，比较慢：游戏启动时在后台先画一个公式"热身"
 		Thread.ofVirtual().name("memorypalace-math-warmup").start(() -> MathRenderer.render("x^2", false, 12, 0xFF000000));

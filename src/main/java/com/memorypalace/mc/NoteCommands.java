@@ -2,6 +2,7 @@ package com.memorypalace.mc;
 
 import com.memorypalace.MemoryPalace;
 import com.memorypalace.core.vault.FolderLocks;
+import com.memorypalace.core.vault.LinkRewriter;
 import com.memorypalace.core.vault.NoteAccess;
 import com.memorypalace.core.vault.NoteLinks;
 import com.memorypalace.core.vault.NoteSummary;
@@ -169,6 +170,7 @@ final class NoteCommands {
 			NoteBooks.refreshCarried(ctx.getSource().getServer(), renamed);
 			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.renamed",
 					note.get().relativePath(), renamed.relativePath()), false);
+			updateLinks(player, vault, note.get());
 			return 1;
 		} catch (IllegalArgumentException e) {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
@@ -177,6 +179,43 @@ final class NoteCommands {
 			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
 		}
 		return 0;
+	}
+
+	/**
+	 * 改名之后，把其他笔记里指向它的链接改成新名字（见 LinkRewriter）：只改这个人能改的明文笔记，要读遍笔记库，放在后台线程。
+	 * 改好了、没权限改的各报一句；一篇都不涉及就不说话。
+	 */
+	private static void updateLinks(ServerPlayer player, Vault vault, NoteSummary before) {
+		NoteAccess.Who who = PalaceAccess.who(player);
+		MinecraftServer server = player.level().getServer();
+		Thread.ofVirtual().name("memorypalace-rename-links").start(() -> {
+			LinkRewriter.Result result;
+			try {
+				// 和反向链接一样要读遍笔记库：占同一组全服名额
+				LinkPayloads.BACKLINK_SLOTS.acquire();
+			} catch (InterruptedException e) {
+				return;
+			}
+			try {
+				result = LinkRewriter.afterRename(vault, before, n -> n.canEdit(who));
+			} catch (RuntimeException e) {
+				MemoryPalace.LOGGER.error("改名后更新链接失败", e);
+				return;
+			} finally {
+				LinkPayloads.BACKLINK_SLOTS.release();
+			}
+			server.execute(() -> {
+				if (player.hasDisconnected()) {
+					return;
+				}
+				if (result.updated() > 0) {
+					player.sendSystemMessage(Component.translatable("command.memorypalace.links_updated", result.updated()));
+				}
+				if (result.skipped() > 0) {
+					player.sendSystemMessage(Component.translatable("command.memorypalace.links_skipped", result.skipped()));
+				}
+			});
+		});
 	}
 
 	/**
@@ -367,9 +406,9 @@ final class NoteCommands {
 		}
 		MinecraftServer server = ctx.getSource().getServer();
 		Thread.ofVirtual().name("memorypalace-backlinks").start(() -> {
-			List<NoteSummary> found;
+			List<NoteSummary> foundThen;
 			try {
-				found = NoteLinks.backlinks(vault, target, n -> visible.contains(n.id()));
+				foundThen = LinkPayloads.backlinks(vault, target, visible);
 			} finally {
 				BACKLINKS_RUNNING.remove(player.getUUID());
 			}
@@ -377,6 +416,7 @@ final class NoteCommands {
 				if (player.hasDisconnected()) {
 					return;
 				}
+				List<NoteSummary> found = LinkPayloads.stillReadable(player, vault, foundThen);
 				String title = target.relativePath().substring(0, target.relativePath().length() - 3);
 				if (found.isEmpty()) {
 					player.sendSystemMessage(Component.translatable("command.memorypalace.backlinks_none", title));

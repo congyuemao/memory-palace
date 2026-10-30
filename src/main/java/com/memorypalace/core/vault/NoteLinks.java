@@ -130,13 +130,14 @@ public final class NoteLinks {
 
 	/**
 	 * 哪些笔记链接到了 target（不含它自己）。只看 visible 里的明文笔记：加密笔记的正文服务端读不出来。按路径排序。
+	 * 链接也只在 visible 里解析：看不见的同名笔记不能把链接"抢走"（不然少掉的反向链接会透露有这么一篇）。
 	 */
 	public static List<NoteSummary> backlinks(Vault vault, NoteSummary target, Predicate<NoteSummary> visible) {
-		List<NoteSummary> all = vault.list();
+		List<NoteSummary> all = vault.list().stream().filter(n -> n.id().equals(target.id()) || visible.test(n)).toList();
 		Resolver resolver = new Resolver(all);
 		List<NoteSummary> out = new ArrayList<>();
 		for (NoteSummary note : all) {
-			if (note.id().equals(target.id()) || note.encrypted() || !visible.test(note)) {
+			if (note.id().equals(target.id()) || note.encrypted()) {
 				continue;
 			}
 			String body;
@@ -156,7 +157,75 @@ public final class NoteLinks {
 		return out;
 	}
 
+	/** 编辑器里输入 [[ 时的一个候选：insert 是填进 [[ ]] 里的文字，path 是笔记的相对路径（给人看）。 */
+	public record Suggestion(String insert, String path) {}
+
+	/**
+	 * [[ 补全的候选，最多 max 个。query 不分大小写：文件名以它开头的排最前，其次文件名包含它的，再次路径包含它的；
+	 * 同一档里路径短的在前。填进去的是文件名（不带 .md）；有同名笔记时填不带 .md 的完整路径，免得指错。
+	 */
+	public static List<Suggestion> suggest(Collection<NoteSummary> notes, String query, int max) {
+		String q = query == null ? "" : query.strip().replace('\\', '/').toLowerCase(Locale.ROOT);
+		java.util.Map<String, Integer> stems = new java.util.HashMap<>();
+		for (NoteSummary note : notes) {
+			stems.merge(stem(note.relativePath().toLowerCase(Locale.ROOT)), 1, Integer::sum);
+		}
+		record Ranked(NoteSummary note, int rank) {}
+		List<Ranked> ranked = new ArrayList<>();
+		for (NoteSummary note : notes) {
+			String path = withoutMd(note.relativePath());
+			String lowerStem = stem(note.relativePath().toLowerCase(Locale.ROOT));
+			int rank = lowerStem.startsWith(q) ? 0 : lowerStem.contains(q) ? 1 : path.toLowerCase(Locale.ROOT).contains(q) ? 2 : -1;
+			if (rank >= 0) {
+				ranked.add(new Ranked(note, rank));
+			}
+		}
+		return ranked.stream()
+				.sorted(Comparator.comparingInt(Ranked::rank)
+						.thenComparingInt(r -> r.note().relativePath().length())
+						.thenComparing(r -> r.note().relativePath()))
+				.limit(Math.max(0, max))
+				.map(r -> {
+					String path = withoutMd(r.note().relativePath());
+					String name = path.substring(path.lastIndexOf('/') + 1);
+					boolean unique = stems.getOrDefault(name.toLowerCase(Locale.ROOT), 0) == 1;
+					return new Suggestion(unique ? name : path, r.note().relativePath());
+				})
+				.toList();
+	}
+
+	/**
+	 * 点了一个指向不存在笔记的链接、要新建时，新笔记的相对路径（带 .md）。
+	 * [[名字]] 建在当前笔记所在的文件夹；[[文件夹/名字]] 从笔记库根目录算；[文字](路径) 和解析时一样相对当前笔记。
+	 * 外部链接、空的、跑出笔记库的为 empty。
+	 */
+	public static Optional<String> newNotePath(String sourcePath, String link) {
+		if (link == null || link.isBlank() || isExternal(link)) {
+			return Optional.empty();
+		}
+		String folder = folderOf(sourcePath);
+		String path;
+		if (link.startsWith(WIKI)) {
+			String name = withoutAnchor(link.substring(WIKI.length())).replace('\\', '/');
+			path = name.contains("/") ? normalize(name) : normalize(folder.isEmpty() ? name : folder + "/" + name);
+		} else {
+			String target = withoutAnchor(decode(link));
+			if (target.isEmpty()) {
+				return Optional.empty();
+			}
+			path = target.startsWith("/") ? normalize(target.substring(1)) : normalize(folder.isEmpty() ? target : folder + "/" + target);
+		}
+		if (path == null) {
+			return Optional.empty();
+		}
+		return Optional.of(path.toLowerCase(Locale.ROOT).endsWith(".md") ? path : path + ".md");
+	}
+
 	// ---- 内部 ----
+
+	static String withoutMd(String path) {
+		return path.toLowerCase(Locale.ROOT).endsWith(".md") ? path.substring(0, path.length() - 3) : path;
+	}
 
 	private static boolean samePath(String relativePath, String path) {
 		return relativePath.equalsIgnoreCase(path) || relativePath.equalsIgnoreCase(path + ".md");
@@ -169,7 +238,7 @@ public final class NoteLinks {
 	}
 
 	/** 文件名去掉 .md。 */
-	private static String stem(String path) {
+	static String stem(String path) {
 		String name = path.substring(path.lastIndexOf('/') + 1);
 		return name.toLowerCase(Locale.ROOT).endsWith(".md") ? name.substring(0, name.length() - 3) : name;
 	}
@@ -182,7 +251,7 @@ public final class NoteLinks {
 		return slash < 0 ? "" : path.substring(0, slash);
 	}
 
-	private static String withoutAnchor(String target) {
+	static String withoutAnchor(String target) {
 		int hash = target.indexOf('#');
 		return (hash < 0 ? target : target.substring(0, hash)).strip();
 	}
@@ -207,7 +276,7 @@ public final class NoteLinks {
 	}
 
 	/** %20 这样的百分号编码按 UTF-8 解开（"+" 保持原样，它在文件名里就是加号）；编码不对时原样返回。 */
-	private static String decode(String text) {
+	static String decode(String text) {
 		if (text.indexOf('%') < 0) {
 			return text;
 		}

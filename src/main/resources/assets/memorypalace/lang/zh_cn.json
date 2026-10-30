@@ -371,5 +371,13 @@
 	"command.memorypalace.backlinks_header": "以下 %s 篇笔记链接到“%s”（单击即可打开）：",
 	"command.memorypalace.backlinks_open": "单击打开这篇笔记",
 	"command.memorypalace.backlinks_more": "  另有 %s 篇未列出。",
+	"screen.memorypalace.backlinks": "链接到本篇的笔记（%s）",
+	"screen.memorypalace.backlinks_more": "另有 %s 篇未列出。",
+	"screen.memorypalace.broken_link_title": "未找到笔记",
+	"screen.memorypalace.broken_link_message": "未找到链接指向的笔记“%s”。是否新建该笔记？",
+	"screen.memorypalace.broken_link_create": "新建",
+	"screen.memorypalace.broken_link_cancel": "取消",
+	"command.memorypalace.links_updated": "已更新 %s 篇笔记中指向该笔记的链接。",
+	"command.memorypalace.links_skipped": "另有 %s 篇笔记中的链接因权限不足或内容冲突未能更新。",
 	"screen.memorypalace.link_open_external": "在浏览器中打开：%s"
 }

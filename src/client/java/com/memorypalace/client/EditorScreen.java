@@ -4,7 +4,6 @@ import com.memorypalace.client.book.BookLayout;
 import com.memorypalace.client.book.BookLayout.BookLine;
 import com.memorypalace.client.book.BookScreen;
 import com.memorypalace.client.book.BookSettings;
-import com.memorypalace.client.book.BookSettings;
 import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.NoteSaver;
 import com.memorypalace.client.crypto.NoteSealers;
@@ -12,7 +11,9 @@ import com.memorypalace.core.crypto.WrongKeyException;
 import com.memorypalace.core.editor.UndoHistory;
 import com.memorypalace.core.vault.Vault;
 import com.memorypalace.mc.EditPayloads;
+import com.memorypalace.mc.LinkPayloads;
 import com.memorypalace.mc.OpenNotePayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -31,6 +32,7 @@ import java.util.UUID;
 /**
  * 游戏内编辑器：还是那本摊开的书，左页直接在纸上写 Markdown，右页实时预览。
  * Ctrl+S 保存，Ctrl+Z 撤销，Ctrl+Y / Ctrl+Shift+Z 重做；有没保存的修改时按 Esc 会先确认。保存时如果文件在外部被改过，会提示冲突而不是悄悄覆盖。
+ * 输入 [[ 后在右页上方列出笔记名候选：↑↓ 选择，Tab / Enter 填入，Esc 收起。
  * 加密笔记：保存前在客户端加密，服务端只收到密文。
  */
 public class EditorScreen extends BookScreen {
@@ -61,6 +63,18 @@ public class EditorScreen extends BookScreen {
 	private boolean applyingHistory;
 	// 文件夹里的笔记（MPAL2，用文件夹钥匙加密）：上锁后不能在这里补输保险库密码来保存
 	private final boolean folderNote;
+
+	// [[ 补全：completeStart 是 [[ 后面第一个字的位置（-1 = 光标不在 [[ 里），completeQuery 是 [[ 到光标之间的字
+	private static final long SUGGEST_DELAY_MS = 150;
+	private static final int MAX_QUERY = 100;
+	private static int suggestRequest;
+	private int completeStart = -1;
+	private String completeQuery = "";
+	private long queryChangedAt;
+	private String sentQuery;
+	private int dismissedAt = -1; // 按 Esc 收起的那一处：光标离开这个 [[ 之前不再弹出
+	private List<LinkPayloads.Candidate> candidates = List.of();
+	private int selected;
 
 	public EditorScreen(UUID noteId, Component title, String body) {
 		this(noteId, title, body, false, Vault.hash(body));
@@ -207,6 +221,7 @@ public class EditorScreen extends BookScreen {
 	@Override
 	public void tick() {
 		super.tick();
+		updateCompletion();
 		int minutes = BookSettings.autoSave().minutes;
 		long now = System.currentTimeMillis();
 		if (minutes <= 0 || saving || !dirty() || now - lastSaveAt < minutes * 60_000L || now - lastEdit < 2_000
@@ -306,8 +321,161 @@ public class EditorScreen extends BookScreen {
 		this.minecraft.gui.setScreen(new NoteScreen(noteId, this.title, savedBody, encrypted, baseHash, true));
 	}
 
+	// ---- [[ 补全 ----
+
+	private MultilineTextField textField() {
+		if (TEXT_FIELD == null || editBox == null) {
+			return null;
+		}
+		try {
+			return (MultilineTextField) TEXT_FIELD.get(editBox);
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * 光标是不是在一个还没写完的 [[ 里（同一行、中间没有 ] | # [、不是 ![[ 图片）：是的话停手 150 毫秒后向服务端要候选。
+	 * 每刻检查一次，挪光标、打字都能跟上。
+	 */
+	private void updateCompletion() {
+		MultilineTextField field = textField();
+		int start = -1;
+		String query = "";
+		if (field != null && editBox.isFocused()) {
+			int cursor = Math.clamp(field.cursor(), 0, text.length());
+			int lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+			String before = text.substring(lineStart, cursor);
+			int open = before.lastIndexOf("[[");
+			if (open >= 0 && (open == 0 || before.charAt(open - 1) != '!')) {
+				String q = before.substring(open + 2);
+				if (q.length() <= MAX_QUERY && q.chars().noneMatch(c -> c == ']' || c == '[' || c == '|' || c == '#')) {
+					start = lineStart + open + 2;
+					query = q;
+				}
+			}
+		}
+		if (start < 0 || start == dismissedAt) {
+			if (start != dismissedAt) {
+				dismissedAt = -1;
+			}
+			closeCompletion();
+			return;
+		}
+		long now = System.currentTimeMillis();
+		if (start != completeStart || !query.equals(completeQuery)) {
+			if (start != completeStart) {
+				candidates = List.of();
+				sentQuery = null;
+			}
+			completeStart = start;
+			completeQuery = query;
+			queryChangedAt = now;
+		}
+		if (!query.equals(sentQuery) && now - queryChangedAt >= SUGGEST_DELAY_MS
+				&& ClientPlayNetworking.canSend(LinkPayloads.Suggest.TYPE)) {
+			sentQuery = query;
+			ClientPlayNetworking.send(new LinkPayloads.Suggest(++suggestRequest, query));
+		}
+	}
+
+	private void closeCompletion() {
+		completeStart = -1;
+		completeQuery = "";
+		sentQuery = null;
+		candidates = List.of();
+	}
+
+	private boolean completing() {
+		return completeStart >= 0 && !candidates.isEmpty();
+	}
+
+	/** 服务端发来的候选：只收最新一次请求的，而且编辑器还开着、光标还在 [[ 里。 */
+	public static void onSuggestions(LinkPayloads.Suggestions payload) {
+		if (net.minecraft.client.Minecraft.getInstance().gui.screen() instanceof EditorScreen screen
+				&& payload.requestId() == suggestRequest && screen.completeStart >= 0) {
+			screen.candidates = payload.candidates();
+			screen.selected = 0;
+		}
+	}
+
+	/** 把选中的候选填进去：替换 [[ 到光标之间的字，后面没有 ]] 就补上，光标停在 ]] 后面。 */
+	private void acceptCompletion() {
+		MultilineTextField field = textField();
+		if (field == null || !completing()) {
+			return;
+		}
+		String insert = candidates.get(Math.clamp(selected, 0, candidates.size() - 1)).insert();
+		int cursor = Math.clamp(field.cursor(), completeStart, text.length());
+		String rest = text.substring(cursor);
+		String closing = rest.startsWith("]]") ? "" : "]]";
+		String value = text.substring(0, completeStart) + insert + closing + rest;
+		if (value.length() > OpenNotePayload.MAX_BODY) {
+			return;
+		}
+		int newCursor = completeStart + insert.length() + 2;
+		history.breakMerge();
+		editBox.setValue(value, true);
+		history.breakMerge();
+		try {
+			field.seekCursor(Whence.ABSOLUTE, Math.clamp(newCursor, 0, text.length()));
+		} catch (RuntimeException e) {
+			// 挪不了光标就留在原处
+		}
+		closeCompletion();
+	}
+
+	/** 右页上方的候选框：每行"填进去的名字  路径"，选中的一行加底色。 */
+	private void drawCompletion(GuiGraphicsExtractor graphics) {
+		if (!completing()) {
+			return;
+		}
+		int rowH = 11;
+		int x = rightTextX() - 3;
+		int y = top + TEXT_TOP - 2;
+		int w = textWidth() + 6;
+		int h = candidates.size() * rowH + 4;
+		graphics.fill(x - 1, y - 1, x + w + 1, y + h + 1, 0xFF704A2A);
+		graphics.fill(x, y, x + w, y + h, 0xFFF4E8CC);
+		for (int i = 0; i < candidates.size(); i++) {
+			LinkPayloads.Candidate c = candidates.get(i);
+			int rowY = y + 2 + i * rowH;
+			if (i == selected) {
+				graphics.fill(x + 1, rowY - 1, x + w - 1, rowY + rowH - 1, 0x40704A2A);
+			}
+			String name = this.font.plainSubstrByWidth(c.insert(), textWidth() * 3 / 5);
+			graphics.text(this.font, name, x + 3, rowY + 1, BookLayout.TEXT, false);
+			int pathX = x + 3 + this.font.width(name) + 6;
+			String path = this.font.plainSubstrByWidth(c.path(), Math.max(0, x + w - 3 - pathX));
+			graphics.text(this.font, path, pathX, rowY + 1, BookLayout.MUTED, false);
+		}
+	}
+
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		if (completing()) {
+			switch (event.key()) {
+				case InputConstants.KEY_UP -> {
+					selected = Math.floorMod(selected - 1, candidates.size());
+					return true;
+				}
+				case InputConstants.KEY_DOWN -> {
+					selected = Math.floorMod(selected + 1, candidates.size());
+					return true;
+				}
+				case InputConstants.KEY_TAB, InputConstants.KEY_RETURN, InputConstants.KEY_NUMPADENTER -> {
+					acceptCompletion();
+					return true;
+				}
+				case InputConstants.KEY_ESCAPE -> {
+					dismissedAt = completeStart;
+					closeCompletion();
+					return true;
+				}
+				default -> {
+				}
+			}
+		}
 		// 移动光标、改选区（方向键、Home/End、翻页、Ctrl+A）之后的修改另算一步，不和之前的打字合并
 		switch (event.key()) {
 			case InputConstants.KEY_LEFT, InputConstants.KEY_RIGHT, InputConstants.KEY_UP, InputConstants.KEY_DOWN,
@@ -408,6 +576,7 @@ public class EditorScreen extends BookScreen {
 		graphics.text(this.font, left, leftTextX(), indicatorY, BookLayout.MUTED, false);
 		String n = Component.translatable("screen.memorypalace.preview").getString() + " " + (previewPage + 1) + " / " + preview.size();
 		graphics.text(this.font, n, rightTextX() + textWidth() - this.font.width(n), indicatorY, BookLayout.MUTED, false);
+		drawCompletion(graphics);
 		drawLockWarning(graphics);
 	}
 

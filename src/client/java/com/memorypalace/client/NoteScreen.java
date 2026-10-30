@@ -7,15 +7,23 @@ import com.memorypalace.client.crypto.ClientKeys;
 import com.memorypalace.client.crypto.CryptoClient;
 import com.memorypalace.client.crypto.NoteSealers;
 import com.memorypalace.client.render.NoteImageStore;
+import com.memorypalace.core.markdown.MdBlock;
+import com.memorypalace.core.markdown.MdSpan;
+import com.memorypalace.core.vault.NoteLinks;
 import com.memorypalace.core.vault.Vault;
+import com.memorypalace.mc.LinkPayloads;
 import com.memorypalace.mc.OpenNotePayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.inventory.PageButton;
 import net.minecraft.network.chat.Component;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -31,6 +39,11 @@ public class NoteScreen extends BookScreen {
 
 	private PageButton backButton;
 	private PageButton forwardButton;
+
+	// 服务端整理好的链接情况（见 LinkPayloads.Info）：断链换颜色，反向链接列在正文后面。打开后要一次，正文变了再要一次
+	private Set<String> brokenLinks = Set.of();
+	private LinkPayloads.Info linkInfo;
+	private boolean linkInfoRequested;
 
 	/** 按 M 打开的窗口：还没有选笔记时显示说明。 */
 	public NoteScreen() {
@@ -55,7 +68,51 @@ public class NoteScreen extends BookScreen {
 		this.storedHash = newStoredHash;
 		// 外部可能换了图片：重新请求这篇笔记的图
 		NoteImageStore.forget(noteId);
+		requestLinkInfo();
 		relayout();
+	}
+
+	private void requestLinkInfo() {
+		if (noteId != null && ClientPlayNetworking.canSend(LinkPayloads.InfoRequest.TYPE)) {
+			linkInfoRequested = true;
+			ClientPlayNetworking.send(new LinkPayloads.InfoRequest(noteId));
+		}
+	}
+
+	/** 服务端发来的链接情况：正打开着的是这篇就重新排版。 */
+	public static void onLinkInfo(LinkPayloads.Info info) {
+		if (net.minecraft.client.Minecraft.getInstance().gui.screen() instanceof NoteScreen screen && info.noteId().equals(screen.noteId)) {
+			screen.linkInfo = info;
+			screen.brokenLinks = Set.copyOf(info.broken());
+			screen.relayout();
+		}
+	}
+
+	@Override
+	protected boolean brokenLink(String link) {
+		return brokenLinks.contains(link);
+	}
+
+	/** 正文后面接的"链接到本篇的笔记"：分隔线、小标题、每篇一行（点了就打开）。没有反向链接时不加。 */
+	private List<MdBlock> backlinkBlocks() {
+		if (linkInfo == null || linkInfo.backlinks().isEmpty()) {
+			return List.of();
+		}
+		List<MdBlock> blocks = new ArrayList<>();
+		blocks.add(new MdBlock.Rule());
+		blocks.add(new MdBlock.Heading(3, List.of(MdSpan.plain(
+				Component.translatable("screen.memorypalace.backlinks", linkInfo.backlinks().size() + linkInfo.moreBacklinks()).getString()))));
+		for (LinkPayloads.Backlink link : linkInfo.backlinks()) {
+			String path = link.path();
+			String target = path.toLowerCase(java.util.Locale.ROOT).endsWith(".md") ? path.substring(0, path.length() - 3) : path;
+			String shown = link.title().isBlank() ? target : link.title();
+			blocks.add(new MdBlock.ListItem(0, "•", null, List.of(new MdSpan(shown, 0, NoteLinks.WIKI + target))));
+		}
+		if (linkInfo.moreBacklinks() > 0) {
+			blocks.add(new MdBlock.Paragraph(List.of(MdSpan.plain(
+					Component.translatable("screen.memorypalace.backlinks_more", linkInfo.moreBacklinks()).getString()))));
+		}
+		return blocks;
 	}
 
 	@Override
@@ -63,6 +120,9 @@ public class NoteScreen extends BookScreen {
 		super.init();
 		if (closeIfLocked()) {
 			return;
+		}
+		if (!linkInfoRequested) {
+			requestLinkInfo();
 		}
 		relayout();
 		int buttonY = top + pageH - 25;
@@ -92,7 +152,7 @@ public class NoteScreen extends BookScreen {
 		if (this.font == null) {
 			return; // 还没 init，init 时会再排一次
 		}
-		pages = layout(body);
+		pages = layout(body, backlinkBlocks());
 		spread = Math.clamp(spread, 0, maxSpread());
 		updateButtons();
 	}
@@ -108,7 +168,7 @@ public class NoteScreen extends BookScreen {
 
 	/**
 	 * 点书页上的链接：笔记链接交给服务端找到那篇打开（读不了的和不存在的一样说找不到）；
-	 * 网址先弹原版的确认框，确认后用浏览器打开。
+	 * 断链先问要不要新建；网址先弹原版的确认框，确认后用浏览器打开。
 	 */
 	@Override
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
@@ -143,9 +203,24 @@ public class NoteScreen extends BookScreen {
 			}
 			return;
 		}
-		if (link.length() <= com.memorypalace.mc.LinkPayloads.MAX_LINK) {
-			net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(new com.memorypalace.mc.LinkPayloads.OpenLink(noteId, link));
+		if (link.length() > LinkPayloads.MAX_LINK) {
+			return;
 		}
+		if (brokenLinks.contains(link) && ClientPlayNetworking.canSend(LinkPayloads.CreateFromLink.TYPE)) {
+			String name = link.startsWith(NoteLinks.WIKI) ? link.substring(NoteLinks.WIKI.length()) : link;
+			this.minecraft.gui.setScreen(new ConfirmScreen(create -> {
+						this.minecraft.gui.setScreen(this);
+						if (create) {
+							ClientPlayNetworking.send(new LinkPayloads.CreateFromLink(noteId, link));
+						}
+					},
+					Component.translatable("screen.memorypalace.broken_link_title"),
+					Component.translatable("screen.memorypalace.broken_link_message", name),
+					Component.translatable("screen.memorypalace.broken_link_create"),
+					Component.translatable("screen.memorypalace.broken_link_cancel")));
+			return;
+		}
+		ClientPlayNetworking.send(new LinkPayloads.OpenLink(noteId, link));
 	}
 
 	private int maxSpread() {

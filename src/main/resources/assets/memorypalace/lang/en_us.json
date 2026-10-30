@@ -371,5 +371,13 @@
 	"command.memorypalace.backlinks_header": "%s notes link to \"%s\" (click to open):",
 	"command.memorypalace.backlinks_open": "Click to open this note",
 	"command.memorypalace.backlinks_more": "  %s more not shown.",
+	"screen.memorypalace.backlinks": "Linked from (%s)",
+	"screen.memorypalace.backlinks_more": "%s more not shown.",
+	"screen.memorypalace.broken_link_title": "Note Not Found",
+	"screen.memorypalace.broken_link_message": "The linked note \"%s\" does not exist. Do you want to create it?",
+	"screen.memorypalace.broken_link_create": "Create",
+	"screen.memorypalace.broken_link_cancel": "Cancel",
+	"command.memorypalace.links_updated": "Updated links to this note in %s notes.",
+	"command.memorypalace.links_skipped": "Links in %s other notes could not be updated due to insufficient permissions or conflicting changes.",
 	"screen.memorypalace.link_open_external": "Open in browser: %s"
 }

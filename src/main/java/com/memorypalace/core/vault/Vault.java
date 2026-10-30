@@ -106,64 +106,33 @@ public final class Vault {
 		for (Cached c : cache.values()) {
 			cachedByPath.put(c.relativePath(), c);
 		}
-		// 先并行查属性、读内容（读盘、杀毒软件扫描的等待可以重叠），再按路径顺序处理（分配 ID 的结果要稳定）
-		long[][] stats = new long[files.size()][];
-		String[] texts = new String[files.size()];
-		java.util.stream.IntStream.range(0, files.size()).parallel().forEach(i -> {
-			Path file = files.get(i);
-			stats[i] = stat(file);
-			Cached known = cachedByPath.get(relativePath(file));
-			if (known != null && stats[i] != null && known.mtime() == stats[i][0] && known.size() == stats[i][1]) {
-				return; // 没变过，下面直接用缓存
-			}
-			try {
-				texts[i] = Files.readString(file, StandardCharsets.UTF_8);
-			} catch (IOException e) {
-				// 读不了：下面跳过这个文件
-			}
-		});
-		for (int i = 0; i < files.size(); i++) {
-			Path file = files.get(i);
-			String rel = relativePath(file);
-			long[] stat = stats[i];
-			// 没变过的文件（路径、修改时间、大小都和缓存一样）不用再读
-			Cached known = cachedByPath.get(rel);
-			if (known != null && stat != null && known.mtime() == stat[0] && known.size() == stat[1]
-					&& !newIndex.containsKey(known.note().id())) {
-				newIndex.put(known.note().id(), known.note());
-				newModified.put(known.note().id(), stat[0]);
-				continue;
-			}
-			String text = texts[i];
-			long mtime = stat == null ? -1 : stat[0];
-			if (text == null) {
-				continue;
-			}
-			FrontMatter.Parsed parsed = FrontMatter.parse(text);
-			UUID id = parsed.id();
-			boolean encrypted = parsed.fields().containsKey("palace-encrypted") || Ciphertext.isEncrypted(parsed.body());
-			if (encrypted && (id == null || newIndex.containsKey(id))) {
-				// 加密笔记的密文绑定了原来的 ID：绝不能改它的 ID（改了就再也解不开）。
-				// 重复或缺 ID 的加密文件先不收录，原样保留在硬盘上
-				continue;
-			}
-			if (id == null || newIndex.containsKey(id)) {
-				do {
-					id = UUID.randomUUID();
-				} while (newIndex.containsKey(id));
-				try {
-					writeAtomically(file, FrontMatter.withId(text, id));
-				} catch (IOException e) {
-					// 写不回 ID（只读文件等）就先不收录：只存在内存里的 ID 重启后会变，笔记书会失效
-					continue;
+		// 每批先并行查属性、读内容（读盘、杀毒软件扫描的等待可以重叠），再按路径顺序处理（分配 ID 的结果要稳定）。
+		// 分批是为了内存：同时在内存里的只有一批的正文，不会把整个笔记库一下子读进来
+		long[] freshChars = {0};
+		for (int base = 0; base < files.size(); base += SCAN_BATCH) {
+			int count = Math.min(SCAN_BATCH, files.size() - base);
+			int offset = base;
+			long[][] stats = new long[count][];
+			String[] texts = new String[count];
+			java.util.stream.IntStream.range(0, count).parallel().forEach(j -> {
+				Path file = files.get(offset + j);
+				stats[j] = stat(file);
+				Cached known = cachedByPath.get(relativePath(file));
+				if (known != null && stats[j] != null && known.mtime() == stats[j][0] && known.size() == stats[j][1]) {
+					return; // 没变过，下面直接用缓存
 				}
-			}
-			NoteSummary note = summarize(id, rel, parsed);
-			newIndex.put(id, note);
-			newModified.put(id, mtime);
-			if (stat != null && id.equals(parsed.id())) {
-				// 读过的顺便记进缓存：下次扫描、搜索不用再读（写回了新 ID 的文件内容变了，不记）
-				fresh.add(new Cached(rel, stat[0], stat[1], note, parsed.body()));
+				if (stats[j] != null && stats[j][1] > MAX_FILE_BYTES) {
+					return; // 大得离谱的文件不收录（不可能是正常的笔记），免得一个文件就把内存吃光
+				}
+				try {
+					texts[j] = Files.readString(file, StandardCharsets.UTF_8);
+				} catch (IOException e) {
+					// 读不了：下面跳过这个文件
+				}
+			});
+			for (int j = 0; j < count; j++) {
+				scanOne(files.get(offset + j), stats[j], texts[j], cachedByPath, newIndex, newModified, fresh, freshChars);
+				texts[j] = null;
 			}
 		}
 		index.clear();
@@ -242,16 +211,74 @@ public final class Vault {
 		}
 	}
 
+	// 扫描时一批读多少个文件；单个文件超过这么大不收录
+	private static final int SCAN_BATCH = 256;
+	private static final long MAX_FILE_BYTES = 64L * 1024 * 1024;
+
+	/** scan 里处理一个文件：没变就用缓存，否则解析、必要时补 ID，记进 newIndex / newModified / fresh。 */
+	private void scanOne(Path file, long[] stat, String text, Map<String, Cached> cachedByPath,
+			Map<UUID, NoteSummary> newIndex, Map<UUID, Long> newModified, List<Cached> fresh, long[] freshChars) {
+		String rel = relativePath(file);
+		// 没变过的文件（路径、修改时间、大小都和缓存一样）不用再读
+		Cached known = cachedByPath.get(rel);
+		if (known != null && stat != null && known.mtime() == stat[0] && known.size() == stat[1]
+				&& !newIndex.containsKey(known.note().id())) {
+			newIndex.put(known.note().id(), known.note());
+			newModified.put(known.note().id(), stat[0]);
+			return;
+		}
+		long mtime = stat == null ? -1 : stat[0];
+		if (text == null) {
+			return;
+		}
+		FrontMatter.Parsed parsed = FrontMatter.parse(text);
+		UUID id = parsed.id();
+		boolean encrypted = parsed.fields().containsKey("palace-encrypted") || Ciphertext.isEncrypted(parsed.body());
+		if (encrypted && (id == null || newIndex.containsKey(id))) {
+			// 加密笔记的密文绑定了原来的 ID：绝不能改它的 ID（改了就再也解不开）。
+			// 重复或缺 ID 的加密文件先不收录，原样保留在硬盘上
+			return;
+		}
+		if (id == null || newIndex.containsKey(id)) {
+			do {
+				id = UUID.randomUUID();
+			} while (newIndex.containsKey(id));
+			try {
+				writeAtomically(file, FrontMatter.withId(text, id));
+			} catch (IOException e) {
+				// 写不回 ID（只读文件等）就先不收录：只存在内存里的 ID 重启后会变，笔记书会失效
+				return;
+			}
+		}
+		NoteSummary note = summarize(id, rel, parsed);
+		newIndex.put(id, note);
+		newModified.put(id, mtime);
+		if (stat != null && id.equals(parsed.id())) {
+			// 读过的顺便记进缓存：下次扫描、搜索不用再读（写回了新 ID 的文件内容变了，不记）
+			// 只记到缓存放得下为止：记多了最后也会被挤掉，白白占着内存
+			if (freshChars[0] + parsed.body().length() <= CACHE_CHARS) {
+				freshChars[0] += parsed.body().length();
+				fresh.add(new Cached(rel, stat[0], stat[1], note, parsed.body()));
+			}
+		}
+	}
+
 	/** 路径去掉 .md（按路径找笔记时用的键）。 */
 	private static String stemOf(String relativePath) {
 		return isMarkdown(relativePath) ? relativePath.substring(0, relativePath.length() - 3) : relativePath;
+	}
+
+	/** 修改时间按纳秒算（文件系统给多精确就用多精确）：只到毫秒的话，同一毫秒里改了两次、大小又没变就认不出来。 */
+	private static long nanos(java.nio.file.attribute.FileTime time) {
+		java.time.Instant at = time.toInstant();
+		return at.getEpochSecond() * 1_000_000_000L + at.getNano();
 	}
 
 	/** 文件的修改时间和大小；读不到（不存在等）时为 null。 */
 	private static long[] stat(Path file) {
 		try {
 			BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
-			return new long[]{attrs.lastModifiedTime().toMillis(), attrs.size()};
+			return new long[]{nanos(attrs.lastModifiedTime()), attrs.size()};
 		} catch (IOException e) {
 			return null;
 		}
@@ -272,7 +299,7 @@ public final class Vault {
 
 	private static long modifiedTime(Path file) {
 		try {
-			return Files.getLastModifiedTime(file).toMillis();
+			return nanos(Files.getLastModifiedTime(file));
 		} catch (IOException e) {
 			return -1;
 		}

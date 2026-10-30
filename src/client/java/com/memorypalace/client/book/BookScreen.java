@@ -10,6 +10,7 @@ import net.minecraft.client.input.PreeditEvent;
 import com.memorypalace.client.render.NoteImageStore;
 import com.memorypalace.client.render.RasterTextures;
 import com.memorypalace.core.markdown.MarkdownParser;
+import com.memorypalace.core.markdown.MdBlock;
 import com.memorypalace.core.render.MathRenderer;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -184,8 +185,23 @@ public abstract class BookScreen extends Screen {
 
 	/** 把 Markdown 正文排成一页一页（按当前书页大小、字体大小）。 */
 	protected List<List<BookLine>> layout(String body) {
-		return BookLayout.paginate(this.font, MarkdownParser.parse(body),
+		return layout(body, List.of());
+	}
+
+	/** 同上，正文后面再接几段（比如阅读界面末尾的"链接到本篇的笔记"）。 */
+	protected List<List<BookLine>> layout(String body, List<MdBlock> after) {
+		List<MdBlock> blocks = MarkdownParser.parse(body);
+		if (!after.isEmpty()) {
+			blocks = new java.util.ArrayList<>(blocks);
+			blocks.addAll(after);
+		}
+		return BookLayout.paginate(this.font, blocks,
 				(int) (textWidth() / fontScale), (int) (textHeight() / fontScale), new ScreenBoxes());
+	}
+
+	/** 这个链接是不是断链（对应不上笔记）；默认都不是，阅读界面按服务端的结果覆盖。 */
+	protected boolean brokenLink(String link) {
+		return false;
 	}
 
 	/** 图片到了要重新排版：子类在这里重新调用 layout。 */
@@ -222,6 +238,11 @@ public abstract class BookScreen extends Screen {
 
 	/** 给排版器提供公式和图片的贴图。 */
 	private final class ScreenBoxes implements BookLayout.Boxes {
+		@Override
+		public boolean brokenLink(String link) {
+			return BookScreen.this.brokenLink(link);
+		}
+
 		// 公式字号（排版单位）：大写字母高度和原版字体差不多
 		private static final float MATH_SIZE = 10.0F;
 
