@@ -105,6 +105,78 @@ class LinkRewriterTest {
 	}
 
 	@Test
+	void coarseFilterNeverSkipsPercentEncodedNames() {
+		String stem = "空 格";
+		assertTrue(LinkRewriter.mayLinkTo("[x](a%20b/%E7%A9%BA%20%E6%A0%BC.md)", stem), "大写十六进制");
+		assertTrue(LinkRewriter.mayLinkTo("[x](a%20b/%e7%a9%ba%20%e6%a0%bc.md)", stem), "小写十六进制");
+		assertTrue(LinkRewriter.mayLinkTo("[x](a%20b/空%20格.md)", stem), "只编码空格");
+		assertTrue(LinkRewriter.mayLinkTo("[[空 格]]", stem));
+		assertFalse(LinkRewriter.mayLinkTo("[[别的]] 没有百分号", stem));
+	}
+
+	// 真实临时笔记库：改名 → afterRename → 重新读正文，改后的链接还要指向同一篇（同一个 UUID）
+	private static final String UPPER = "a%20b/%E7%A9%BA%20%E6%A0%BC.md";
+	private static final String LOWER = "a%20b/%e7%a9%ba%20%e6%a0%bc.md";
+
+	@Test
+	void renameRewritesPercentEncodedLinksEndToEnd(@TempDir Path dir) throws Exception {
+		Vault vault = new Vault(dir);
+		NoteSummary target = vault.createNote("a b/空 格.md", "# 空 格\n");
+		NoteSummary other = vault.createNote("a b/别.md", "# 别\n");
+		String body = "# 引用\n\n"
+				+ "大写 [甲](" + UPPER + "#定义)、小写 [乙](" + LOWER + ")、尖括号 [丙](<a b/空 格.md>)、[[空 格|别名]]。\n"
+				+ "对照 [丁](a%20b/%E5%88%AB.md) 指向别的笔记。\n"
+				+ "行内代码 `[戊](" + UPPER + ")` 不动。\n"
+				+ "```\n[己](" + UPPER + ")\n```\n";
+		NoteSummary source = vault.createNote("引用.md", body);
+		// 正文里只有小写编码、没有直写文件名的一篇：旧的粗筛会把它跳过
+		NoteSummary encodedOnly = vault.createNote("只有编码.md", "# 只有编码\n\n[乙](" + LOWER + ")\n");
+		NoteSummary theirs = vault.createNote("别人的.md", "# 别人的\n\n[甲](" + UPPER + ")\n");
+		NoteSummary conflicted = vault.createNote("冲突.md", "# 冲突\n\n[甲](" + UPPER + ")\n");
+		NoteSummary sealed = vault.createNote("密文.md", "");
+		String cipher = com.memorypalace.core.crypto.NoteCipher.PREFIX + "[甲](" + UPPER + ")";
+		assertEquals(Vault.WriteResult.OK, vault.writeBody(sealed.id(), cipher, null));
+		NoteSummary before = vault.find(target.id()).orElseThrow();
+
+		vault.renameNote(target.id(), "新 名");
+		String externalEdit = "# 冲突\n\n外部刚改过：[甲](" + UPPER + ")\n";
+		java.util.concurrent.atomic.AtomicBoolean edited = new java.util.concurrent.atomic.AtomicBoolean();
+		LinkRewriter.Result result = LinkRewriter.afterRename(vault, before, n -> {
+			if (n.id().equals(conflicted.id()) && edited.compareAndSet(false, true)) {
+				// 判断完权限、真正保存之前，这篇在外部被改了：保存要报冲突，不能覆盖外部的修改
+				try {
+					vault.writeBody(n.id(), externalEdit, null);
+				} catch (java.io.IOException e) {
+					throw new java.io.UncheckedIOException(e);
+				}
+			}
+			return !n.id().equals(theirs.id());
+		});
+
+		assertEquals(new LinkRewriter.Result(2, 2), result, "引用、只有编码 改好；别人的（无权）和冲突的各算一篇没改");
+		assertEquals(Optional.of("# 只有编码\n\n[乙](a%20b/新%20名.md)\n"), vault.readBody(encodedOnly.id()));
+		String expected = "# 引用\n\n"
+				+ "大写 [甲](a%20b/新%20名.md#定义)、小写 [乙](a%20b/新%20名.md)、尖括号 [丙](<a b/新 名.md>)、[[新 名|别名]]。\n"
+				+ "对照 [丁](a%20b/%E5%88%AB.md) 指向别的笔记。\n"
+				+ "行内代码 `[戊](" + UPPER + ")` 不动。\n"
+				+ "```\n[己](" + UPPER + ")\n```\n";
+		assertEquals(Optional.of(expected), vault.readBody(source.id()));
+		assertEquals(Optional.of("# 别人的\n\n[甲](" + UPPER + ")\n"), vault.readBody(theirs.id()));
+		assertEquals(Optional.of(externalEdit), vault.readBody(conflicted.id()));
+		assertEquals(Optional.of(cipher), vault.readBody(sealed.id()), "密文不动");
+
+		// 改后的每条链接重新解析：对照那条还指向"别"，其余都指向原来那篇（UUID 不变）
+		List<NoteSummary> notes = vault.list();
+		List<UUID> resolved = com.memorypalace.core.markdown.MarkdownParser.links(expected).stream()
+				.map(link -> NoteLinks.resolve(notes, source.relativePath(), link).map(NoteSummary::id).orElse(null))
+				.toList();
+		assertFalse(resolved.contains(null), "改后没有断链：" + resolved);
+		assertEquals(1, resolved.stream().filter(other.id()::equals).count());
+		assertTrue(resolved.stream().filter(id -> !id.equals(other.id())).allMatch(target.id()::equals));
+		assertEquals("a b/新 名.md", vault.find(target.id()).orElseThrow().relativePath());
+	}
+
+	@Test
 	void newNotePathFollowsTheLink() {
 		assertEquals(Optional.of("线代/行列式.md"), NoteLinks.newNotePath("线代/特征值.md", "wiki:行列式"));
 		assertEquals(Optional.of("数学/行列式.md"), NoteLinks.newNotePath("线代/特征值.md", "wiki:数学/行列式#定义"));

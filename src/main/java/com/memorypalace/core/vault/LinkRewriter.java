@@ -51,9 +51,7 @@ public final class LinkRewriter {
 		}
 		Rename rename = new Rename(new NoteLinks.Resolver(old), new NoteLinks.Resolver(now), before.id(),
 				before.relativePath(), after.relativePath());
-		// 先粗筛：正文里连旧文件名都没有的不可能链接到它（%20 编码的也算上）
 		String stem = NoteLinks.stem(before.relativePath()).toLowerCase(Locale.ROOT);
-		String encoded = stem.replace(" ", "%20");
 		int updated = 0;
 		int skipped = 0;
 		for (NoteSummary note : now) {
@@ -69,8 +67,7 @@ public final class LinkRewriter {
 			if (body == null) {
 				continue;
 			}
-			String lower = body.toLowerCase(Locale.ROOT);
-			if (!lower.contains(stem) && !lower.contains(encoded)) {
+			if (!mayLinkTo(body, stem)) {
 				continue;
 			}
 			String sourceBefore = note.id().equals(before.id()) ? before.relativePath() : note.relativePath();
@@ -95,6 +92,15 @@ public final class LinkRewriter {
 			}
 		}
 		return new Result(updated, skipped);
+	}
+
+	/**
+	 * 粗筛：这篇正文有没有可能链接到文件名（不带 .md、已转小写）为 stem 的笔记。只能多放、不能漏：
+	 * [[…]] 不解码，指向它就一定原样写着文件名（解析时不分大小写）；[文字](路径) 解析前会做百分号解码，
+	 * 文件名的任意一部分都可能编码成 %XX（大小写都行），所以正文里有 % 就交给 rewrite 逐条解析判断。
+	 */
+	static boolean mayLinkTo(String body, String stem) {
+		return body.indexOf('%') >= 0 || body.toLowerCase(Locale.ROOT).contains(stem);
 	}
 
 	/** 一篇笔记的正文里指向 rename.target 的链接改成新名字；没有要改的原样返回。 */
