@@ -82,7 +82,7 @@ public final class LookPayloads {
 		}
 		if (note.encrypted()) {
 			String path = note.relativePath();
-			return "【加密】" + path.substring(0, path.length() - 3);
+			return HostLanguage.pick("【加密】", "[Encrypted] ") + path.substring(0, path.length() - 3);
 		}
 		return note.folder().isEmpty() ? note.title() : note.folder() + " / " + note.title();
 	}

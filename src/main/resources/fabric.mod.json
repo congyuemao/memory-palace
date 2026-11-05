@@ -3,8 +3,10 @@
 	"id": "memorypalace",
 	"version": "${version}",
 	"name": "Memory Palace",
-	"description": "把 Markdown/LaTeX 笔记挂到世界里的书架上，做成你的记忆宫殿。",
-	"authors": ["congyuemao"],
+	"description": "Keep Markdown and LaTeX notes on bookshelves in your world, and turn it into a memory palace.",
+	"authors": [
+		"congyuemao"
+	],
 	"contact": {
 		"homepage": "https://github.com/congyuemao/memory-palace",
 		"sources": "https://github.com/congyuemao/memory-palace",
@@ -33,5 +35,8 @@
 		"java": ">=25",
 		"fabric-api": "*",
 		"fabric-permissions-api-v0": "*"
+	},
+	"suggests": {
+		"modmenu": "*"
 	}
 }

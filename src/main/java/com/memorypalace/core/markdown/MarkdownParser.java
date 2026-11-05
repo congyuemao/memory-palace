@@ -24,6 +24,9 @@ import org.commonmark.parser.beta.ParsedInline;
  * 注意：本包（core/）不允许 import 任何 net.minecraft / net.fabricmc 的类。
  */
 public final class MarkdownParser {
+	/** 行内图片占位文字里的“图片”二字；core 没有语言文件，客户端解析前按当前语言设置。 */
+	public static volatile String imageLabel = "图片";
+
 	private MarkdownParser() {}
 
 	/**
@@ -313,7 +316,7 @@ public final class MarkdownParser {
 				for (MdSpan span : spans(node)) {
 					alt.append(span.text());
 				}
-				appendSpan(result, alt.isEmpty() ? "[图片]" : "[图片: " + alt + "]",
+				appendSpan(result, alt.isEmpty() ? "[" + imageLabel + "]" : "[" + imageLabel + ": " + alt + "]",
 						styles | MdSpan.ITALIC, link);
 			} else {
 				int nestedStyles = styles;

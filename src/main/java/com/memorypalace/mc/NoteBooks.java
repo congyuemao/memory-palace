@@ -47,7 +47,7 @@ public final class NoteBooks {
 	 */
 	static String titleFor(NoteSummary note) {
 		String tag = " #" + note.id().toString().substring(0, 4);
-		String title = isPublic(note) ? note.title() : "【私密笔记】" + tag;
+		String title = isPublic(note) ? note.title() : HostLanguage.pick("【私密笔记】", "[Private]") + tag;
 		return title.length() > MAX_TITLE ? title.substring(0, MAX_TITLE - 1) + "…" : title;
 	}
 
@@ -64,11 +64,15 @@ public final class NoteBooks {
 		return (owner == null ? PalaceServer.hostName() : PalaceServer.playerName(owner)).orElse(DEFAULT_AUTHOR);
 	}
 
-	private static final String DEFAULT_AUTHOR = "记忆宫殿";
+	private static final String DEFAULT_AUTHOR = "Memory Palace";
 
 	private static Component pageFor(NoteSummary note) {
-		String where = isPublic(note) ? "对应笔记：\n" + note.relativePath() : "这是一篇不公开的笔记，只有有权限的人能打开。";
-		return Component.literal("记忆宫殿笔记书\n\n" + where + "\n\n（装了 Memory Palace 模组后右键即可阅读）");
+		// 没装模组的客户端没有语言文件，显示英文后备文本
+		return isPublic(note)
+				? Component.translatableWithFallback("book.memorypalace.page_public",
+						"Memory Palace note book\n\nNote:\n%s\n\n(Install the Memory Palace mod and right-click to read this note.)", note.relativePath())
+				: Component.translatableWithFallback("book.memorypalace.page_private",
+						"Memory Palace note book\n\nThis note is private. Only players with permission can open it.\n\n(Install the Memory Palace mod and right-click to read this note.)");
 	}
 
 	private static void setContent(ItemStack stack, NoteSummary note) {

@@ -18,6 +18,13 @@ import java.util.TreeSet;
 
 /** /palace 各子命令共用：权限判断、找笔记、路径、限速、补全、聊天里的链接。 */
 final class CommandSupport {
+	/** 失败原因，作为翻译文本的参数：core 的校验失败走语言文件，其他异常保留原始信息。 */
+	static Object reason(Exception e) {
+		return e instanceof com.memorypalace.core.vault.LocalizedFailure failure
+				? net.minecraft.network.chat.Component.translatable("error.memorypalace." + failure.key())
+				: String.valueOf(e.getMessage());
+	}
+
 	private CommandSupport() {}
 
 	// 普通玩家新建、分享：每人每秒 1 次、最多连着 5 次

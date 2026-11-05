@@ -135,10 +135,10 @@ final class NoteCommands {
 			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.folder_created", folder), false);
 			return 1;
 		} catch (IllegalArgumentException e) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", CommandSupport.reason(e)));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("新建文件夹失败", e);
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.folder_create_failed", CommandSupport.reason(e)));
 		}
 		return 0;
 	}
@@ -173,10 +173,10 @@ final class NoteCommands {
 			updateLinks(player, vault, note.get());
 			return 1;
 		} catch (IllegalArgumentException e) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", CommandSupport.reason(e)));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("笔记改名失败", e);
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.rename_failed", CommandSupport.reason(e)));
 		}
 		return 0;
 	}
@@ -270,10 +270,10 @@ final class NoteCommands {
 			ctx.getSource().sendSuccess(() -> Component.translatable("command.memorypalace.deleted", target, trashed), false);
 			return 1;
 		} catch (IllegalArgumentException e) {
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", CommandSupport.reason(e)));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("删除失败", e);
-			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", e.getMessage()));
+			ctx.getSource().sendFailure(Component.translatable("command.memorypalace.delete_failed", CommandSupport.reason(e)));
 		}
 		return 0;
 	}
@@ -338,7 +338,7 @@ final class NoteCommands {
 			NoteSummary note = vault.createNote(path, initial, owner);
 			return Optional.of(new Created(note, vault.readBody(note.id()).orElse(""), locked));
 		} catch (IllegalArgumentException e) {
-			fail.accept(Component.translatable("command.memorypalace.new_failed", e.getMessage()));
+			fail.accept(Component.translatable("command.memorypalace.new_failed", CommandSupport.reason(e)));
 		} catch (IOException e) {
 			MemoryPalace.LOGGER.error("新建笔记失败：{}", path, e);
 			fail.accept(Component.translatable("message.memorypalace.read_failed"));

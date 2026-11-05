@@ -90,14 +90,22 @@ public final class PalaceConfig {
 	private static void addComments(CommentedFileConfig config) {
 		comment(config, MULTIPLAYER,
 				"多人总开关（局域网、服务器）。默认 false。",
+				"Master switch for multiplayer (LAN and servers). Default: false.",
 				"false：只有本机房主能用笔记功能，其他玩家什么都看不到（单人游戏不受影响；专用服务器上没有房主，等于全部停用）。",
+				"false: only the local host can use notes (singleplayer is not affected; a dedicated server has no host, so notes are disabled for everyone).",
 				"true：其他玩家也能用，按每篇笔记的权限来：能读谁的笔记、能不能新建、能不能分享，见 README。",
-				"注意：没加密的笔记，服务器管理员（局域网里就是房主）在硬盘上都能看到。");
+				"true: other players can use notes according to per-note permissions. See the README for details.",
+				"注意：没加密的笔记，服务器管理员（局域网里就是房主）在硬盘上都能看到。",
+				"Note: server administrators (the host on LAN) can read unencrypted notes on disk.");
 		comment(config, DEFAULT_VISIBILITY,
 				"没写 palace-read 的笔记默认谁能读：\"private\"（只有作者和被分享的人，默认）或 \"everyone\"（所有人）。",
-				"某个世界用 /palace visibility 设置过的，以世界设置为准。");
-		comment(config, MAX_NOTES, "每个玩家最多建多少篇笔记，0 = 不限。管理员不受限制。");
-		comment(config, MAX_CHARS, "普通玩家保存的一篇笔记最多多少字，0 = 不限。管理员不受限制。");
+				"某个世界用 /palace visibility 设置过的，以世界设置为准。",
+				"Who can read notes without palace-read: \"private\" (the author and shared players; default) or \"everyone\".",
+				"A value set in a world with /palace visibility takes priority.");
+		comment(config, MAX_NOTES, "每个玩家最多建多少篇笔记，0 = 不限。管理员不受限制。",
+				"Maximum notes per player. 0 = unlimited. Administrators are exempt.");
+		comment(config, MAX_CHARS, "普通玩家保存的一篇笔记最多多少字，0 = 不限。管理员不受限制。",
+				"Maximum characters per note for regular players. 0 = unlimited. Administrators are exempt.");
 	}
 
 	// TOML 注释每行写成 "# 文字"

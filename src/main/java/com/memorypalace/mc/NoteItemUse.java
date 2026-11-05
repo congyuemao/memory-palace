@@ -62,7 +62,7 @@ public final class NoteItemUse {
 			return;
 		}
 		boolean secret = NoteItems.isBlankLocked(stack);
-		String name = "记忆笔记/" + LocalDateTime.now().format(STAMP);
+		String name = HostLanguage.pick("记忆笔记/", "Memory Notes/") + LocalDateTime.now().format(STAMP);
 		Optional<NoteCommands.Created> created = NoteCommands.createNote(player, name, "", secret, player::sendSystemMessage);
 		if (created.isEmpty()) {
 			return;
@@ -205,7 +205,7 @@ public final class NoteItemUse {
 				return;
 			}
 			String file = sourceNote.relativePath().substring(sourceNote.relativePath().lastIndexOf('/') + 1);
-			String base = "抄本/" + file.substring(0, file.length() - 3) + " 抄本";
+			String base = copyFolder() + "/" + file.substring(0, file.length() - 3) + HostLanguage.pick(" 抄本", " Copy");
 			String name = freeName(vault, player, base);
 			// 加密笔记先建一篇空的（默认标题），内容等客户端加密好再存；被锁的文件夹里 createNote 也只建空的
 			Optional<NoteCommands.Created> created = NoteCommands.createNote(player, name, encrypted ? "" : body, false,
@@ -308,9 +308,13 @@ public final class NoteItemUse {
 		}
 	}
 
+	private static String copyFolder() {
+		return HostLanguage.pick("抄本", "Copies");
+	}
+
 	/** 抄本会建在哪个文件夹（"抄本/"，普通玩家在自己的个人区里）现在是不是上了锁。 */
 	private static boolean targetLocked(Vault vault, ServerPlayer player) {
-		String folder = (PalaceAccess.admin(player) ? "" : CommandSupport.personalFolder(player) + "/") + "抄本";
+		String folder = (PalaceAccess.admin(player) ? "" : CommandSupport.personalFolder(player) + "/") + copyFolder();
 		try {
 			return FolderLocks.lockedFolder(vault, folder).isPresent();
 		} catch (IllegalArgumentException e) {

@@ -105,7 +105,7 @@ public class SearchScreen extends Screen {
 		String path = e.path();
 		int slash = path.lastIndexOf('/');
 		// 加密笔记的标题本来就是"【加密】文件夹/文件名"，不用再加
-		String folder = e.encrypted() || slash < 0 ? "" : "（" + path.substring(0, slash) + "）";
+		String folder = e.encrypted() || slash < 0 ? "" : " (" + path.substring(0, slash) + ")";
 		return Component.literal(e.title() + folder + "  ·  ").append(where);
 	}
 

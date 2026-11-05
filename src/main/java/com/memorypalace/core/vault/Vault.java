@@ -619,21 +619,21 @@ public final class Vault {
 	/** 命令里输入的相对路径：不能为空、不能是绝对路径，每一段不能为空、不能以点开头、不能有 Windows 不允许的字符。 */
 	private static String checkedRelative(String relativePath) {
 		if (relativePath == null || relativePath.isBlank()) {
-			throw new IllegalArgumentException("路径不能为空");
+			throw new LocalizedFailure("path_empty", "路径不能为空");
 		}
 		String input = relativePath.strip().replace('\\', '/');
 		if (input.startsWith("/")) {
-			throw new IllegalArgumentException("路径不能是绝对路径");
+			throw new LocalizedFailure("path_absolute", "路径不能是绝对路径");
 		}
 		for (String part : input.split("/", -1)) {
 			if (part.isEmpty()) {
-				throw new IllegalArgumentException("文件名或文件夹名不能为空");
+				throw new LocalizedFailure("name_empty", "文件名或文件夹名不能为空");
 			}
 			if (part.startsWith(".")) {
-				throw new IllegalArgumentException("文件名或文件夹名不能以点开头，也不能使用 ..");
+				throw new LocalizedFailure("name_dot", "文件名或文件夹名不能以点开头，也不能使用 ..");
 			}
 			if (part.chars().anyMatch(c -> c < 32 || "<>:\"|?*".indexOf(c) >= 0)) {
-				throw new IllegalArgumentException("文件名或文件夹名含有 Windows 不允许的字符");
+				throw new LocalizedFailure("name_chars", "文件名或文件夹名含有 Windows 不允许的字符");
 			}
 		}
 		return input;
@@ -645,21 +645,21 @@ public final class Vault {
 		try {
 			Path path = root.getFileSystem().getPath(input);
 			if (path.isAbsolute() || path.getRoot() != null) {
-				throw new IllegalArgumentException("路径不能是绝对路径");
+				throw new LocalizedFailure("path_absolute", "路径不能是绝对路径");
 			}
 			file = root.resolve(path).normalize();
 		} catch (InvalidPathException e) {
-			throw new IllegalArgumentException("路径不合法", e);
+			throw new LocalizedFailure("path_invalid", "路径不合法", e);
 		}
 		if (!file.startsWith(root) || file.equals(root)) {
-			throw new IllegalArgumentException("路径不能超出笔记库");
+			throw new LocalizedFailure("path_outside", "路径不能超出笔记库");
 		}
 		Path ancestor = file.getParent();
 		while (!Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
 			ancestor = ancestor.getParent();
 		}
 		if (!ancestor.toRealPath().startsWith(root.toRealPath())) {
-			throw new IllegalArgumentException("路径不能通过链接超出笔记库");
+			throw new LocalizedFailure("path_link", "路径不能通过链接超出笔记库");
 		}
 		return file;
 	}
@@ -672,7 +672,7 @@ public final class Vault {
 		String input = relativePath == null ? null : relativePath.strip().replaceAll("[/\\\\]+$", "");
 		Path dir = resolveInside(checkedRelative(input));
 		if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
-			throw new IllegalArgumentException("已经有同名的文件夹或文件");
+			throw new LocalizedFailure("name_taken", "已经有同名的文件夹或文件");
 		}
 		Files.createDirectories(dir);
 		return root.relativize(dir).toString().replace('\\', '/');
@@ -690,7 +690,7 @@ public final class Vault {
 		}
 		Path file = resolveInside(input);
 		if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
-			throw new IllegalArgumentException("笔记已存在");
+			throw new LocalizedFailure("note_exists", "笔记已存在");
 		}
 		String name = file.getFileName().toString();
 		String newBody = body.isEmpty() ? "# " + name.substring(0, name.length() - 3) + "\n\n" : body;
@@ -707,7 +707,7 @@ public final class Vault {
 			// ATOMIC_MOVE 可能覆盖已存在的目标，新建时必须保留存在性检查。
 			Files.move(temporary, file);
 		} catch (FileAlreadyExistsException e) {
-			throw new IllegalArgumentException("笔记已存在", e);
+			throw new LocalizedFailure("note_exists", "笔记已存在", e);
 		} finally {
 			Files.deleteIfExists(temporary);
 		}
@@ -722,10 +722,10 @@ public final class Vault {
 	 * 所以书架上的书、历史版本、加密都不受影响。新名字不合法、和别的文件重名 → IllegalArgumentException。
 	 */
 	public synchronized NoteSummary renameNote(UUID id, String newName) throws IOException {
-		NoteSummary note = find(id).orElseThrow(() -> new IllegalArgumentException("笔记不存在"));
+		NoteSummary note = find(id).orElseThrow(() -> new LocalizedFailure("note_missing", "笔记不存在"));
 		String name = checkedRelative(newName);
 		if (name.contains("/")) {
-			throw new IllegalArgumentException("新名字里不能有斜杠（改名不移动文件夹）");
+			throw new LocalizedFailure("rename_slash", "新名字里不能有斜杠（改名不移动文件夹）");
 		}
 		if (!isMarkdown(name)) {
 			name += ".md";
@@ -737,7 +737,7 @@ public final class Vault {
 		}
 		if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
 			if (!Files.isSameFile(source, target)) {
-				throw new IllegalArgumentException("这个文件夹里已经有同名的笔记");
+				throw new LocalizedFailure("rename_taken", "这个文件夹里已经有同名的笔记");
 			}
 			// 只改大小写（Windows 上是同一个文件）：先挪到临时名字再改回来
 			Path temporary = source.resolveSibling(".palace-rename-" + UUID.randomUUID() + ".tmp");
@@ -762,7 +762,7 @@ public final class Vault {
 		String input = checkedRelative(relativePath == null ? null : relativePath.strip().replaceAll("[/\\\\]+$", ""));
 		Path source = resolveInside(input);
 		if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
-			throw new IllegalArgumentException("找不到这篇笔记或这个文件夹");
+			throw new LocalizedFailure("not_found", "找不到这篇笔记或这个文件夹");
 		}
 		String stamp = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss.SSS'Z'", java.util.Locale.ROOT)
 				.withZone(java.time.ZoneOffset.UTC).format(now);

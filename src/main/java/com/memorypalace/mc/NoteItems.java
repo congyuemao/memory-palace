@@ -65,8 +65,8 @@ public final class NoteItems {
 				data.putBoolean("locked", true);
 			}
 		});
-		stack.set(DataComponents.ITEM_NAME, Component.literal(locked ? "上锁笔记（空白）" : "记忆笔记（空白）"));
-		stack.set(DataComponents.LORE, lore(locked ? "右键：新建一篇加密笔记" : "右键：新建一篇笔记"));
+		stack.set(DataComponents.ITEM_NAME, locked ? Component.translatableWithFallback("item.memorypalace.blank_locked", "Locked Note (Blank)") : Component.translatableWithFallback("item.memorypalace.blank_note", "Memory Note (Blank)"));
+		stack.set(DataComponents.LORE, locked ? lore("item.memorypalace.lore.new_locked", "Right-click: create an encrypted note") : lore("item.memorypalace.lore.new", "Right-click: create a note"));
 		setModel(stack, locked);
 		return stack;
 	}
@@ -86,9 +86,10 @@ public final class NoteItems {
 			data.putString("copy_of", source.toString());
 			data.putBoolean("auto_copy", true);
 		});
-		stack.set(DataComponents.ITEM_NAME, Component.literal(sourceTitle == null || sourceTitle.isBlank()
-				? "记忆笔记抄本" : sourceTitle + " 抄本"));
-		stack.set(DataComponents.LORE, lore("取出后即抄写为一篇独立的新笔记", "（加密笔记取出后需右键完成抄写；只有能阅读原笔记的人才能抄写）"));
+		stack.set(DataComponents.ITEM_NAME, sourceTitle == null || sourceTitle.isBlank()
+				? Component.translatableWithFallback("item.memorypalace.copy", "Memory Note Copy")
+				: Component.translatableWithFallback("item.memorypalace.copy_named", "%s Copy", sourceTitle));
+		stack.set(DataComponents.LORE, lore("item.memorypalace.lore.copy_take", "Taking this item copies the note into a separate new note", "item.memorypalace.lore.copy_take_hint", "(For an encrypted note, right-click after taking it to finish. Only players who can read the original can copy it.)"));
 		return stack;
 	}
 
@@ -103,7 +104,7 @@ public final class NoteItems {
 			return;
 		}
 		update(stack, data -> data.remove("auto_copy"));
-		stack.set(DataComponents.LORE, lore("右键：把原笔记抄成一篇独立的新笔记", "（只有读得了原笔记的人能抄）"));
+		stack.set(DataComponents.LORE, lore("item.memorypalace.lore.copy_click", "Right-click: copy the original into a separate new note", "item.memorypalace.lore.copy_click_hint", "(Only players who can read the original can copy it.)"));
 	}
 
 	/** 是不是空白笔记（含空白上锁笔记、空白抄本）。 */
@@ -159,7 +160,7 @@ public final class NoteItems {
 	/** 记下"正在按这条记录抄写"（物品不消耗，抄好了才换成笔记书；中途取消可以再右键接着抄）。 */
 	static void setCopyJob(ItemStack stack, UUID job) {
 		update(stack, data -> data.putString("copy_job", job.toString()));
-		stack.set(DataComponents.LORE, lore("抄写中：内容要用文件夹密码加密后才算抄好", "没抄完可以再右键继续"));
+		stack.set(DataComponents.LORE, lore("item.memorypalace.lore.copying", "Copying: the content is saved after it is encrypted with the folder password", "item.memorypalace.lore.copying_hint", "If copying is interrupted, right-click to continue."));
 	}
 
 	static void clearCopyJob(ItemStack stack) {
@@ -167,7 +168,7 @@ public final class NoteItems {
 			return;
 		}
 		update(stack, data -> data.remove("copy_job"));
-		stack.set(DataComponents.LORE, lore("右键：把原笔记抄成一篇独立的新笔记", "（只有读得了原笔记的人能抄）"));
+		stack.set(DataComponents.LORE, lore("item.memorypalace.lore.copy_click", "Right-click: copy the original into a separate new note", "item.memorypalace.lore.copy_click_hint", "(Only players who can read the original can copy it.)"));
 	}
 
 	// ---- 待上锁 ----
@@ -180,7 +181,7 @@ public final class NoteItems {
 	public static ItemStack withPendingLock(ItemStack bound) {
 		ItemStack stack = bound.copyWithCount(1);
 		update(stack, data -> data.putBoolean("pending_lock", true));
-		stack.set(DataComponents.LORE, lore("待上锁：作者下次右键时加密"));
+		stack.set(DataComponents.LORE, lore("item.memorypalace.lore.pending_lock", "Pending lock: encrypted the next time the author right-clicks"));
 		setModel(stack, true);
 		return stack;
 	}
@@ -214,7 +215,12 @@ public final class NoteItems {
 		return true;
 	}
 
-	private static ItemLore lore(String... lines) {
-		return new ItemLore(java.util.Arrays.stream(lines).map(l -> (Component) Component.literal(l).withStyle(LORE)).toList());
+	/** keyAndFallback：语言键、英文后备文本交替排列。 */
+	private static ItemLore lore(String... keyAndFallback) {
+		java.util.List<Component> lines = new java.util.ArrayList<>();
+		for (int i = 0; i < keyAndFallback.length; i += 2) {
+			lines.add(Component.translatableWithFallback(keyAndFallback[i], keyAndFallback[i + 1]).withStyle(LORE));
+		}
+		return new ItemLore(lines);
 	}
 }

@@ -1,5 +1,6 @@
 plugins {
 	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'me.modmuss50.mod-publish-plugin' version "${mod_publish_version}"
 }
 
 repositories {
@@ -126,3 +127,51 @@ tasks.register("decryptTool", Jar) {
 }
 
 assemble.dependsOn "decryptTool"
+
+// 模组和离线工具都带上许可声明
+jar {
+	from("LICENSE") { rename { "LICENSE_memorypalace" } }
+	from("THIRD_PARTY_NOTICES.md")
+}
+tasks.named("decryptTool") {
+	from("LICENSE") { rename { "LICENSE_memorypalace" } }
+	from("THIRD_PARTY_NOTICES.md")
+}
+
+// 发布到 CurseForge / Modrinth：gradle.properties 填项目 ID，环境变量给令牌，然后 ./gradlew publishMods。
+// 缺少已配置平台的令牌时只做试运行，不会上传。说明见 docs/publishing/README.md
+publishMods {
+	def curseforgeId = providers.gradleProperty("curseforge_project_id").getOrElse("")
+	def modrinthId = providers.gradleProperty("modrinth_project_id").getOrElse("")
+	def curseforgeToken = providers.environmentVariable("CURSEFORGE_TOKEN")
+	def modrinthToken = providers.environmentVariable("MODRINTH_TOKEN")
+
+	file = tasks.jar.archiveFile
+	displayName = "Memory Palace ${project.version}"
+	version = project.version.toString()
+	changelog = providers.fileContents(layout.projectDirectory.file("docs/publishing/release-notes.md")).asText
+	type = STABLE
+	modLoaders.add("fabric")
+	dryRun = (curseforgeId && !curseforgeToken.isPresent()) || (modrinthId && !modrinthToken.isPresent())
+
+	if (curseforgeId) {
+		curseforge {
+			projectId = curseforgeId
+			accessToken = curseforgeToken
+			minecraftVersions.add(project.minecraft_version)
+			clientRequired = true
+			serverRequired = false
+			requires("fabric-api")
+			optional("modmenu")
+		}
+	}
+	if (modrinthId) {
+		modrinth {
+			projectId = modrinthId
+			accessToken = modrinthToken
+			minecraftVersions.add(project.minecraft_version)
+			requires("fabric-api")
+			optional("modmenu")
+		}
+	}
+}

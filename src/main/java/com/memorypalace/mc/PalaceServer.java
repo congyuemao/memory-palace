@@ -313,5 +313,31 @@ public final class PalaceServer {
 
 				每次进入世界时，笔记库会自动备份至 .minecraft/memory-palace-backups/。
 				""", StandardCharsets.UTF_8);
+		Files.writeString(root.resolve("Welcome.md"), """
+				# Welcome to Memory Palace
+
+				This folder is the note vault for the current world.
+				After you add .md files to this folder (subfolders are supported), run the following command in the game:
+
+				/palace give Welcome
+
+				This gives you the note book for this note. Put it in a chiseled bookshelf, and then right-click that slot to read it.
+				Sneak + right-click takes the book out. You can also place a note book on a lectern and right-click to read it.
+
+				- /palace list: list all notes
+				- /palace rescan: rescan the vault
+				- /palace where <note>: show the bookshelves and lecterns that hold a note
+				- /palace new <path>: create a note and edit it in the game
+				- /palace newsecret <path>: create an encrypted note
+				- /palace newfolder <path>: create a folder
+				- /palace rename "new name" <note>: rename a note
+				- /palace delete <note or folder>: move it to the .palace/trash folder, where it can be recovered
+				- /palace history <note>: view or restore earlier versions
+				- /palace backlinks <note>: list the notes that link to this note
+
+				Write [[another note]] in a note, and then click it while reading to open that note.
+
+				The vault is backed up to .minecraft/memory-palace-backups/ each time you enter a world.
+				""", StandardCharsets.UTF_8);
 	}
 }

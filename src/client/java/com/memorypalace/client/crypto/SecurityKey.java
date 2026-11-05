@@ -91,7 +91,7 @@ public final class SecurityKey {
 		user.cbId = (int) userId.size();
 		user.pbId = userId;
 		user.pwszName = new WString("memory-palace");
-		user.pwszDisplayName = new WString("记忆宫殿保险库");
+		user.pwszDisplayName = new WString("Memory Palace Vault");
 
 		CoseParam es256 = new CoseParam();
 		es256.dwVersion = 1;

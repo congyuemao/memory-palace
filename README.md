@@ -1,258 +1,268 @@
 <p align="center">
-  <img src="art/icon/icon-512.png" alt="Memory Palace 图标" width="160">
+  <img src="art/icon/icon-512.png" alt="Memory Palace icon" width="160">
 </p>
 
-<h1 align="center">Memory Palace · 记忆宫殿</h1>
+<h1 align="center">Memory Palace</h1>
 
 <p align="center">
-  把 Markdown / LaTeX 笔记放进 Minecraft 世界里的书架上，搭一座属于自己的记忆宫殿。<br>
-  Minecraft Java 版 26.3 · Fabric · MIT
+  Place Markdown / LaTeX notes on bookshelves in your Minecraft world and build your own memory palace.<br>
+  Minecraft Java Edition 26.3 · Fabric · MIT
 </p>
 
+English | [简体中文](README.zh-CN.md)
+
 <p align="center">
-  <a href="../../releases/latest">下载最新版</a>
+  <a href="../../releases/latest">Download the latest release</a>
 </p>
 
 ---
 
-"图书馆二楼第三个书架"可以成为一篇笔记的物理地址。世界里只放**指针**，笔记本体永远是存档旁边的普通 `.md` 文件：
+"The third bookshelf on the library's second floor" can become the physical address of a note. The world stores only **pointers**; the notes themselves always remain ordinary `.md` files alongside the world data:
 
-- 书架被苦力怕炸掉，笔记不会丢；卸载模组，书还是普通的成书，书页上写着对应的文件名。
-- 笔记库就是一个普通文件夹，可以直接用 Obsidian、Typora 打开编辑，游戏里即时刷新。
-- 备份笔记 = 备份一个文件夹。
+- If a creeper destroys a bookshelf, your notes are safe. If you uninstall the mod, the books remain ordinary written books, with the corresponding filenames on their pages.
+- The note vault is an ordinary folder. Open it in Obsidian or Typora to edit directly; changes appear immediately in the game.
+- Backing up your notes means backing up one folder.
 
 Inspired by [ins@aamanda.li](https://www.instagram.com/aamanda.li)'s [meme reel](https://www.instagram.com/reel/Dd4gs6UTB0w/).
 
-## 功能
+## Features
 
-**阅读与书写**
-- **笔记书**：就是原版成书，放进原版雕纹书架（每架 6 本）或讲台。右键阅读，潜行 + 右键取出。
-- **原版书本风格的阅读界面**：左右两页摊开，书页大小和字号可分别调整。
-- **Markdown**：标题、列表、任务清单、引用、代码块、表格、链接、本地图片（`![说明](图.png)` 与 Obsidian 的 `![[图.png]]`）。
-- **笔记之间的链接**：支持 Obsidian 的 `[[笔记名]]`、`[[文件夹/笔记名|显示文字]]`、`[[笔记名#标题]]`，以及 `[文字](文件夹/笔记.md)`。在书页上单击链接即可打开对应的笔记；查找规则与 Obsidian 相同，同名时优先选择同一文件夹中的笔记。单击网址会先请求确认，然后在浏览器中打开。`/palace backlinks <笔记>` 列出链接到这篇笔记的所有笔记（加密笔记的正文无法在服务端读取，因此不计入）。
-- **LaTeX**：行内公式 `$...$`，行间公式 `$$...$$`。
-- **游戏内编辑器**：左页编辑、右页实时预览，`Ctrl+S` 保存，`Ctrl+Z` 撤销，`Ctrl+Y`（或 `Ctrl+Shift+Z`）重做；文件在外部被改过时会提示冲突。
+**Reading and writing**
 
-**记忆宫殿**
-- **快速收集**：按 `K` 记下一个想法，写进当天的 `收件箱/yyyy-MM-dd.md`，之后再整理归位。
-- **找笔记**：按 `J` 搜索标题、文件夹和正文，选中后用光柱和方向箭头（含上下高度差）带你走到那个书架。
-- **准星显示书名**：对准书架上的某一格，就能看到那本书是哪篇笔记。
-- **`/palace where`**：查一篇笔记放在哪些书架和讲台上，点坐标会把传送命令填进聊天框。
+- **Note books**: ordinary written books, placed in vanilla chiseled bookshelves (six books per shelf) or on lecterns. Right-click to read; sneak + right-click to remove.
+- **A reader styled like vanilla books**: two facing pages, with independently adjustable page and font sizes.
+- **Markdown**: headings, lists, task lists, block quotes, code blocks, tables, links, and local images (`![description](image.png)` and Obsidian's `![[image.png]]`).
+- **Links between notes**: supports Obsidian's `[[note name]]`, `[[folder/note name|display text]]`, and `[[note name#heading]]`, as well as `[text](folder/note.md)`. Click a link on the page to open the corresponding note. Lookup follows Obsidian's rules, preferring a note in the same folder when names match. Web links ask for confirmation before opening in your browser. `/palace backlinks <note>` lists all notes linking to the current note (encrypted note bodies cannot be read by the server and are excluded).
+- **LaTeX**: inline formulas with `$...$` and display formulas with `$$...$$`.
+- **In-game editor**: edit on the left page with a live preview on the right. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` (or `Ctrl+Shift+Z`) redoes. A conflict prompt appears if the file has changed externally.
 
-**安全**
-- **加密笔记**：Argon2id + AES-256-GCM，密码不保存，解密只在客户端进行；可选恢复密钥，闲置自动上锁。
-- **自动备份**：每次进入世界，把笔记库备份到存档之外，删掉世界也不会连笔记一起丢。
-- **多人游戏**：局域网、服务器上按每篇笔记控制谁能读、谁能改，可以分享给指定玩家（默认关闭，见下文）。
+**Memory palace**
 
-## 安装
+- **Quick capture**: press `K` to record an idea in the day's `收件箱/yyyy-MM-dd.md` and organize it later. The literal folder name `收件箱` means "inbox".
+- **Find notes**: press `J` to search titles, folders, and text. Select a note, then follow a light beam and directional arrow, including vertical distance, to its bookshelf.
+- **Book titles at the crosshair**: point at a bookshelf slot to see which note the book represents.
+- **`/palace where`**: find the bookshelves and lecterns holding a note. Click coordinates to fill in a teleport command in chat.
 
-需要：
+**Security**
 
-- Minecraft Java 版 **26.3**
-- [Fabric Loader](https://fabricmc.net/use/installer/) 0.20.1 或更高
+- **Encrypted notes**: Argon2id + AES-256-GCM. Passwords are not stored, and decryption takes place only on the client. Optional recovery keys and automatic locking after inactivity.
+- **Automatic backups**: on each world entry, the vault is backed up outside the world save, so deleting the world does not also delete its note backups.
+- **Multiplayer**: control who can read and edit each note on LAN worlds and servers, and share with specific players (disabled by default; see below).
+
+## Installation
+
+Requirements:
+
+- Minecraft Java Edition **26.3**
+- [Fabric Loader](https://fabricmc.net/use/installer/) 0.20.1 or later
 - [Fabric API](https://modrinth.com/mod/fabric-api)
-- Java 25（官方启动器自带）
-- 可选：[Mod Menu](https://modrinth.com/mod/modmenu)，在模组列表里打开设置
+- Java 25 (included with the official launcher)
+- Optional: [Mod Menu](https://modrinth.com/mod/modmenu), to open settings from the mod list
 
-从 [Releases](../../releases) 下载 `memorypalace-x.y.z.jar`，和 Fabric API 一起放进 `.minecraft/mods/`。
+Download `memorypalace-x.y.z.jar` from [Releases](../../releases) and place it in `.minecraft/mods/` alongside Fabric API.
 
-## 快速上手
+## Quick start
 
-1. 进入世界，输入 `/palace new 数学/特征值`：新建一篇笔记，背包里多一本笔记书，并直接打开编辑器。
-2. 写几行 Markdown，`Ctrl+S` 保存。
-3. 把书插进雕纹书架，空手右键那一格就能阅读。
-4. 想在电脑上写：打开 `saves/<世界>/memory-palace/`，用 Obsidian 当作 vault 打开即可。外部改完，游戏里立刻刷新。
-5. 已有的 `.md` 文件直接放进这个文件夹，输入 `/palace rescan`，再用 `/palace give <路径>` 领书。
+1. Enter a world and run `/palace new math/eigenvalues`. This creates a note, adds its book to your inventory, and opens the editor.
+2. Write a few lines of Markdown and press `Ctrl+S` to save.
+3. Put the book in a chiseled bookshelf. Right-click its slot with an empty hand to read it.
+4. To write on your computer, open `saves/<world>/memory-palace/` as a vault in Obsidian. External changes appear immediately in the game.
+5. To import existing `.md` files, place them in this folder, run `/palace rescan`, then use `/palace give <path>` to obtain their books.
 
-## 按键与命令
+## Keys and commands
 
-| 按键 | 作用 |
+| Key | Action |
 |---|---|
-| `M` | 打开笔记窗口 |
-| `K` | 快速收集 |
-| `J` | 找笔记 |
+| `M` | Open the note window |
+| `K` | Quick capture |
+| `J` | Find notes |
 
-按键可在"选项 → 控制 → 按键绑定 → 记忆宫殿"中修改；进入世界时会提示与其他按键的冲突。
+Change key bindings under "Options → Controls → Key Binds → Memory Palace". Conflicts with other bindings are reported when you enter a world.
 
-| 命令 | 说明 |
+| Command | Description |
 |---|---|
-| `/palace give <笔记或文件夹>` | 领取笔记书；文件夹会领出里面每一篇（单次最多 36 本） |
-| `/palace new <路径>` | 新建笔记并在游戏内编辑 |
-| `/palace list [文件夹]` | 列出笔记 |
-| `/palace where <笔记>` | 查看笔记所在的书架与讲台 |
-| `/palace open <笔记>` | 直接打开一篇笔记 |
-| `/palace backlinks <笔记>` | 列出链接到这篇笔记的笔记，单击即可打开 |
-| `/palace share <玩家\|everyone> read\|edit <笔记>` | 把自己的笔记分享给别人（只读 / 可编辑） |
-| `/palace unshare <玩家\|everyone> <笔记>` | 取消分享 |
-| `/palace newsecret <路径>` | 新建加密笔记 |
-| `/palace encrypt <笔记>` | 加密一篇笔记 |
-| `/palace decrypt <笔记>` | 解除加密：会打开这篇笔记，点书下方的「解密」，再输入密码确认 |
-| `/palace lockfolder <文件夹>` | 给文件夹单独设密码，里面的笔记用文件夹密码加密 |
-| `/palace folderpassword <文件夹>` | 修改文件夹密码 |
-| `/palace unlockfolder <文件夹>` | 解除文件夹密码，里面的笔记改回明文 |
-| `/palace history <笔记>` | 查看历史版本，可以点「查看」只读打开或点「还原」（能改这篇的人才能用） |
-| `/palace sharepassword <笔记>` | 给自己的一篇加密笔记设置 / 更换阅读密码，知道密码的人可以阅读（只读） |
-| `/palace unsharepassword <笔记>` | 取消阅读密码 |
-| `/palace lock` | 立即给加密笔记上锁（含已解锁的文件夹、输过的阅读密码） |
-| `/palace rescan` | 重新扫描笔记库（管理员） |
-| `/palace visibility [everyone\|private]` | 查看 / 修改本世界的笔记可见性（管理员） |
-| `/palace reload` | 重新读取服务端配置文件（管理员） |
+| `/palace give <note or folder>` | Obtain note books; a folder gives a book for each note inside, up to 36 at a time |
+| `/palace new <path>` | Create a note and edit it in the game |
+| `/palace list [folder]` | List notes |
+| `/palace where <note>` | Find the bookshelves and lecterns holding a note |
+| `/palace open <note>` | Open a note directly |
+| `/palace backlinks <note>` | List notes linking to this note; click to open them |
+| `/palace share <player\|everyone> read\|edit <note>` | Share your note with others (read-only or editable) |
+| `/palace unshare <player\|everyone> <note>` | Stop sharing |
+| `/palace newsecret <path>` | Create an encrypted note |
+| `/palace encrypt <note>` | Encrypt a note |
+| `/palace decrypt <note>` | Remove encryption: opens the note; click "Decrypt" below the book, then enter your password to confirm |
+| `/palace lockfolder <folder>` | Set a separate folder password and encrypt its notes with that password |
+| `/palace folderpassword <folder>` | Change a folder password |
+| `/palace unlockfolder <folder>` | Remove a folder password and return its notes to plain text |
+| `/palace history <note>` | View version history; click "View" to open read-only or "Restore" to restore a version (requires permission to edit the note) |
+| `/palace sharepassword <note>` | Set or replace a reading password for one of your encrypted notes; anyone who knows it can read the note, but cannot edit it |
+| `/palace unsharepassword <note>` | Remove the reading password |
+| `/palace lock` | Lock encrypted notes immediately, including unlocked folders and entered reading passwords |
+| `/palace rescan` | Rescan the vault (administrator) |
+| `/palace visibility [everyone\|private]` | View or change this world's note visibility (administrator) |
+| `/palace reload` | Reload the server configuration file (administrator) |
 
-命令里的笔记路径可以省略 `.md`，可以含空格和中文；领书、查位置、分享等命令按 `Tab` 可补全笔记路径。
+Note paths in commands can omit `.md` and can contain spaces and Chinese characters. Press `Tab` to complete note paths in commands for obtaining books, finding locations, sharing, and similar operations.
 
-## 物品与配方
+## Items and recipes
 
-记忆笔记仍然是原版成书（不注册新物品：卸载模组后还是一本书，没装模组的玩家也能进服），只是带了标记，有自己的物品栏贴图：普通笔记是青金石蓝封面加金色徽记，加密笔记多一块带锁孔的铁片和一道铁扣。没装模组的客户端看到的是普通成书。
+Memory Notes are still vanilla written books. No new items are registered, so they remain books when the mod is removed, and players without the mod can join the server. They carry metadata and use custom inventory textures: ordinary notes have a lapis-blue cover with a gold emblem; encrypted notes also have an iron plate with a keyhole and an iron clasp. Clients without the mod see ordinary written books.
 
-| 配方（无序合成） | 得到 | 右键 |
+| Recipe (shapeless) | Result | Right-click |
 |---|---|---|
-| 书与笔 + 青金石 | 记忆笔记（空白） | 在自己的个人区新建一篇笔记（`记忆笔记/日期 时间`），书变成这篇的笔记书，打开编辑器 |
-| 空白记忆笔记 + 铁锭 + 绊线钩 | 上锁笔记（空白） | 同上，新建后马上用保险库密码加密 |
-| 笔记书 + 铁锭 + 绊线钩 | 待上锁的笔记书 | 作者右键时加密这篇（服务端没有钥匙，要在作者自己的客户端上加密）；别人右键照常打开 |
-| 笔记书 + 空白记忆笔记 | 抄本（原来的笔记书留在合成格里，空白记忆笔记被消耗） | 从合成结果栏取出时即抄写为一篇独立的新笔记（`抄本/原文件名 抄本`），取出的就是新笔记的笔记书。加密笔记同样当场抄写，需要时会请求输入密码，并用你的密钥重新加密。抄进设有文件夹密码的 `抄本/` 时，取出后需右键抄本完成；在背包的 2×2 合成格中按 Shift 取出加密笔记的抄本时也需右键完成。只有能阅读原笔记的人才能抄写 |
+| Book and quill + lapis lazuli | Memory Note (Blank) | Create a note in your personal area (`Memory Notes/date time`), turn the book into that note's book, and open the editor |
+| Blank Memory Note + iron ingot + tripwire hook | Locked Note (Blank) | As above, then immediately encrypt the new note with your vault password |
+| Note book + iron ingot + tripwire hook | Note book pending lock | The author encrypts the note by right-clicking (the server has no key, so encryption must run on the author's client); other players open it normally |
+| Note book + blank Memory Note | Copy (the original book stays in the crafting grid; the blank Memory Note is consumed) | Taking the result creates an independent note (`Copies/original filename Copy`); the item you receive is the new note's book. Encrypted notes are also copied immediately, requesting a password when needed and re-encrypting with your key. If `Copies/` has a folder password, right-click the copy after taking it to finish. Shift-clicking an encrypted copy out of the inventory's 2×2 crafting grid also requires a right-click to finish. Only players who can read the original can copy it |
 
-- 这几个是"特殊配方"（和原版复制成书一样），配方书里不显示，按上表摆就行。
-- 新建、抄写都要有新建笔记的权限（`memorypalace.create`），受每人篇数上限限制。
-- 抄本所在的 `抄本/` 文件夹设了文件夹密码时：服务端先建一篇空的占位，内容在你的客户端上用文件夹密码加密后才存进去，存好了抄本才换成笔记书（明文从不写进那个文件夹）。中途取消或保存失败，再右键抄本会接着往同一篇里抄；占位在外部被改过就不覆盖它，另建一篇。
-- 原版"复制成书"复制出来的笔记书仍指向同一篇笔记（链接副本），要独立的一份用抄本。
-- 解除加密不能合成，只能在打开的笔记上点「解密」。
+The default folders for blank notes and copies follow the host system's language: `Memory Notes/` and `Copies/` on non-Chinese systems, and `记忆笔记/` and `抄本/` on Chinese systems.
 
-## 历史版本
+- These are "special recipes", like vanilla written-book copying. They do not appear in the recipe book; arrange the ingredients as shown above.
+- Creating and copying notes require the create permission (`memorypalace.create`) and count toward the per-player note limit.
+- If the destination `Copies/` folder has a folder password, the server first creates an empty placeholder. The content is encrypted with the folder password on your client before being saved, and the copy becomes a note book only after saving succeeds. Plain text is never written to that folder. If you cancel or saving fails, right-click the copy again to continue copying into the same note. If the placeholder has been changed externally, it is left intact and a new one is created.
+- Vanilla written-book copying creates books that still point to the same note (linked copies). Use the copy recipe for an independent note.
+- Encryption cannot be removed through crafting. Click "Decrypt" in the open note.
 
-在游戏内每次保存笔记时，保存前的内容都会留一份在 `.palace/history/<笔记ID>/`。`/palace history <笔记>` 列出它们，每份显示增删的行数，点「查看」只读打开，点「还原」恢复成那个版本，超过 10 份时可以翻页。
+## Version history
 
-- 最新一份保存全文，更早的只保存与后一份的差异，占用空间很小。
-- 保留规则：最近 30 份全部保留；7 天内每小时保留一份；1 年内每天保留一份；每篇最多 4 MB。频繁保存只会替换最近的几份，挤不掉更早的历史。
-- 还原也算一次保存，还原前的内容一定会留一份，点错了可以再还原回来。
-- 只记游戏内的保存；在 Obsidian 等外部编辑器里改的不记（整库备份仍然有效）。
-- 能改这篇的人才能看历史、还原；只读的人看不到。
-- 加密笔记的历史只存密文。明文笔记被加密时，以前的明文历史会被删掉。还原加密笔记时，旧版本会用现在的锁重新加密：已经取消的阅读密码不会跟着旧版本回来。
-- 不算进每人的篇数配额。
+Each time you save a note in the game, its previous content is retained in `.palace/history/<note ID>/`. `/palace history <note>` lists the versions with their added and removed line counts. Click "View" to open one read-only, or "Restore" to restore it. Pagination is available when there are more than 10 versions.
 
-## 笔记库
+- The latest version stores the full text; earlier versions store only their differences from the following version, using little space.
+- Retention: keep all of the latest 30 versions, one per hour for the last 7 days, and one per day for the last year, up to 4 MB per note. Frequent saves only replace the most recent versions and do not push out older history.
+- Restoring also counts as a save. The content before restoration is always retained, so an accidental restore can be reversed.
+- Only saves made in the game are recorded. Changes made in Obsidian or other external editors are not recorded here; full-vault backups still apply.
+- Only players who can edit a note can view or restore its history. Read-only users cannot access it.
+- Encrypted note history stores only ciphertext. When a plain-text note is encrypted, its previous plain-text history is deleted. Restoring an encrypted note re-encrypts the old version with the current protection, so a reading password that has been removed does not return with an old version.
+- History does not count toward the per-player note quota.
+
+## Note vault
 
 ```
-saves/<世界>/memory-palace/        ← 笔记库，可直接用 Obsidian 打开
-├─ 数学/特征值.md
-├─ 收件箱/2026-10-27.md            ← 快速收集
-├─ players/<玩家UUID>/…           ← 多人游戏时玩家各自的个人区（含自己的收件箱）
-└─ .palace/                        ← 模组自己的数据（位置记录、钥匙圈、世界设置）
+saves/<world>/memory-palace/      ← Note vault; open directly in Obsidian
+├─ math/eigenvalues.md
+├─ 收件箱/2026-10-27.md           ← Quick capture
+├─ players/<player UUID>/…       ← Each player's personal area in multiplayer, including their inbox
+└─ .palace/                      ← Mod data: location records, keyrings, world settings
 ```
 
-每篇笔记开头有一段 front matter，模组靠里面的 `palace-id` 认出它，所以在外部**改名、移动文件夹都不会断链**：
+Each note begins with front matter. The mod identifies it using `palace-id`, so **renaming files or moving them between folders externally does not break their in-game links**:
 
 ```markdown
 ---
 palace-id: 7f3a2c1e-…
-palace-owner: <作者 UUID>          # 以下三项只在多人游戏时用到，都可以省略
-palace-read: everyone             # 谁能读：everyone 或逗号分隔的玩家 UUID
-palace-edit: <UUID>, <UUID>       # 作者之外谁能改
+palace-owner: <author UUID>       # These three fields are used only in multiplayer and are optional
+palace-read: everyone            # Readers: everyone or comma-separated player UUIDs
+palace-edit: <UUID>, <UUID>       # Editors other than the author
 ---
-# 特征值
+# Eigenvalues
 $$A\mathbf{v} = \lambda \mathbf{v}$$
 ```
 
-## 多人游戏（局域网、服务器）
+## Multiplayer (LAN and servers)
 
-**默认关闭。** 关闭时只有本机房主能用笔记功能，其他玩家什么都看不到；单人游戏不受影响。专用服务器上没有房主，关闭时谁都不能用。
+**Disabled by default.** When disabled, only the local host can use notes; other players cannot see any of them. Singleplayer is unaffected. Dedicated servers have no local host, so no one can use notes while the feature is disabled.
 
-### 开启
+### Enabling multiplayer
 
-编辑 `config/memorypalace-server.toml`（第一次启动世界或服务器时自动生成，带注释），把 `multiplayer` 改成 `true`，然后由管理员执行 `/palace reload`（专用服务器上要重启）。配置文件写坏、读取失败时，一律按多人关闭处理。
+Edit `config/memorypalace-server.toml`, which is generated with comments when a world or server first starts. Set `multiplayer` to `true`, then have an administrator run `/palace reload` (a dedicated server requires a restart). If the configuration is invalid or cannot be read, multiplayer is treated as disabled.
 
-| 配置项 | 默认 | 说明 |
+| Setting | Default | Description |
 |---|---|---|
-| `multiplayer` | `false` | 多人总开关 |
-| `default_visibility` | `"private"` | 没写 `palace-read` 的笔记谁能读：`"private"`（作者和被分享的人）或 `"everyone"`（所有人）。世界里用 `/palace visibility` 设置过的，以世界设置为准 |
-| `max_notes_per_player` | `200` | 每个玩家最多建多少篇笔记，`0` = 不限 |
-| `max_note_chars` | `200000` | 普通玩家保存的一篇笔记最多多少字，`0` = 不限 |
+| `multiplayer` | `false` | Master switch for multiplayer |
+| `default_visibility` | `"private"` | Who can read notes without `palace-read`: `"private"` (the author and people granted access) or `"everyone"` (all players). A world-specific setting made with `/palace visibility` takes precedence |
+| `max_notes_per_player` | `200` | Maximum notes each player can create; `0` means unlimited |
+| `max_note_chars` | `200000` | Maximum characters an ordinary player can save in one note; `0` means unlimited |
 
-管理员不受篇数和字数限制。
+Administrators are exempt from the note-count and character limits.
 
-### 权限节点
+### Permission nodes
 
-用 [fabric-permissions-api](https://github.com/lucko/fabric-permissions-api) 判断（已打包，无需另装）。装了 LuckPerms 等权限模组时，服主可以按玩家组分配；没装时按下表的默认值。
+Permissions are checked with [fabric-permissions-api](https://github.com/lucko/fabric-permissions-api), which is bundled and does not need a separate installation. With a permissions mod such as LuckPerms, server owners can assign them by player group. Otherwise, the defaults below apply.
 
-| 节点 | 默认 | 作用 |
+| Node | Default | Purpose |
 |---|---|---|
-| `memorypalace.admin` | 本机房主、2 级及以上 OP | 领任意笔记的书、在任意位置新建、重扫、改可见性、重读配置 |
-| `memorypalace.create` | 所有人 | 在自己的个人区新建笔记 |
-| `memorypalace.give` | 所有人 | 领自己读得了的笔记的书 |
-| `memorypalace.share` | 所有人 | 分享、取消分享自己的笔记 |
+| `memorypalace.admin` | Local host; operators at level 2 or above | Obtain books for any note, create notes anywhere, rescan, change visibility, and reload configuration |
+| `memorypalace.create` | Everyone | Create notes in the player's personal area |
+| `memorypalace.give` | Everyone | Obtain books for notes the player can read |
+| `memorypalace.share` | Everyone | Share and stop sharing the player's own notes |
 
-### 规则
+### Rules
 
-- **新建**：普通玩家的笔记建在自己的个人区 `players/<UUID>/` 下，作者是自己；命令里输入的路径先在个人区里找。本机房主照旧建在输入的位置。
-- **读和改**：作者能读能改；`palace-edit` 里的人能改也能读；`palace-read` 里的人能读。没有作者的笔记（以前的笔记、房主建的笔记、收件箱）归本机房主，专用服务器上归管理员。
-- **分享**：只有作者能分享。加密笔记和收件箱不能用 `share` 分享（加密笔记可以设阅读密码，见下面"加密"）。`/palace unshare everyone <笔记>` 把公开笔记改回私有；没有"黑名单"，笔记还对所有人公开时，单独去掉某个人，他照样能读。
-- **书只是门牌，不是钥匙**：拿到别人的笔记书什么也打不开，服务端每次都会检查权限。开放局域网或在服务器上时，不公开的笔记书名只显示"【私密笔记】#7f3a"这类占位文字。
-- **图片**：图片必须和引用它的笔记在同一区域（同一个人的个人区，或都不在个人区里）；图片所在文件夹及上层文件夹里有你读不了的笔记，你就看不到这张图。私密笔记请放在子文件夹里。
-- **同时编辑**：不支持多人实时同步编辑。两人同时修改同一篇，后保存的人会收到冲突提示。
-- **收件箱**：每人一个。房主的在 `收件箱/`，其他玩家的在自己的个人区 `players/<UUID>/收件箱/`，只有本人能看。设过加密密码后，随手记会自动加密，服务器管理员也看不到内容（见下面"加密"）。
-- **加密**：每人一个钥匙圈、一个保险库密码（房主的在 `.palace/keyring`，其他玩家的在 `.palace/keyrings/<UUID>`），只能加密自己是作者的笔记。加密之后这篇只有作者能打开，原来分享给别人的权限也随之失效。
-- 在外部改了 `palace-read` / `palace-edit`，约 2 秒内生效；新放进笔记库的文件需要管理员 `/palace rescan`。
+- **Creation**: ordinary players create notes under their own `players/<UUID>/` area and are recorded as the author. Paths entered in commands are looked up in that personal area first. The local host continues to create notes at the specified location.
+- **Reading and editing**: the author can read and edit; players in `palace-edit` can both edit and read; players in `palace-read` can read. Notes without an author, such as older notes, host-created notes, and inbox notes, belong to the local host, or to administrators on a dedicated server.
+- **Sharing**: only the author can share a note. Encrypted notes and inbox notes cannot be shared with `share`; encrypted notes can instead use a reading password, as described under "Encryption". `/palace unshare everyone <note>` makes a public note private again. There is no deny list: removing one player does not prevent them from reading a note that is still public.
+- **A book is an address, not a key**: obtaining someone else's note book grants no access. The server checks permissions on every request. In LAN worlds or on servers, private note titles display only a placeholder such as "[Private Note] #7f3a".
+- **Images**: an image must be in the same area as the note that references it: either the same player's personal area or both outside personal areas. If the image's folder or an ancestor folder contains notes you cannot read, you cannot view that image. Keep private notes in subfolders.
+- **Concurrent editing**: real-time collaborative editing is not supported. If two players edit the same note, the second person to save receives a conflict prompt.
+- **Inbox**: each player has one. The host's is in `收件箱/`; other players' inboxes are in `players/<UUID>/收件箱/` and are visible only to their owners. Once an encryption password is set, quick notes are encrypted automatically, so even server administrators cannot read their content (see "Encryption").
+- **Encryption**: each player has a keyring and a vault password. The host's keyring is at `.palace/keyring`; other players' keyrings are at `.palace/keyrings/<UUID>`. Players can encrypt only notes they authored. After encryption, only the author can open the note, and earlier sharing permissions no longer grant access.
+- External changes to `palace-read` / `palace-edit` take effect within about 2 seconds. Files newly added to the vault require an administrator to run `/palace rescan`.
 
-### 注意
+### Notes
 
-- **没加密的笔记，服务器管理员可以直接在硬盘上看到**（局域网里就是房主）。只有加密能防住管理员。
-- 书名是写在书上的。**纯单人游戏时领的书仍是真实标题**，开放局域网前请把放着私密笔记的书收好。
+- **Server administrators can read unencrypted notes directly from disk**; on a LAN world, this means the host. Only encryption protects against administrators.
+- Book titles are written into the books themselves. **Books obtained in a purely singleplayer session retain their actual titles.** Put away books containing private notes before opening the world to LAN.
 
-## 加密
+## Encryption
 
-- **收件箱加密**：随手记（按 `K`）不用输密码也会加密——钥匙圈里有一对收件箱钥匙，记的时候用公钥加密，打开收件箱时输密码用私钥解开。服务端只看得到"哪天记了几条、大概多长"。在收件箱里整理、保存后，这一篇会存成普通的加密笔记，当天之后的随手记接着记到 `yyyy-MM-dd-2.md`。还没设过密码时随手记照旧是明文，可以在设置里关掉收件箱加密。
-- **防公钥调包**（只在别人的服务器上）：恶意服务器可能把你的收件箱公钥换成它自己的。客户端会记住第一次见到的公钥指纹，之后对不上就弹两步确认，默认不保存；确认是自己重设过钥匙圈、换了电脑等原因，可以在设置里点"信任新的收件箱公钥"。
-- 一个保险库密码管你所有的加密笔记（多人游戏时每人各有一个）。
-- **文件夹独立密码**：`/palace lockfolder <文件夹>` 给一个文件夹单独设密码（比如日记）。里面的笔记（含子文件夹）改用文件夹钥匙加密，**保险库密码打不开它们**，解锁了普通加密笔记也看不到日记。之后在这个文件夹里新建的笔记会自动加密，服务端也不允许把明文存进去。锁文件（`.palace-lock`）放在文件夹里，在外面移动、改名文件夹，锁跟着走。玩家只能锁自己个人区里的文件夹，房主能锁个人区以外的；文件夹里的笔记必须都是自己写的，不能在已经锁了的文件夹里外再锁。设密码时同样可以生成恢复密钥。
-  - 上锁后笔记是逐篇加密的（服务器限制保存速度，每秒约 1 篇），完成后会报告成功、失败、未处理各几篇。中途上锁、掉线没加密完，再执行一次 `/palace lockfolder <文件夹>` 就会接着加密剩下的，已加密的不会重复处理。
-  - `/palace folderpassword <文件夹>`：修改文件夹密码（先输当前密码）。
-  - `/palace unlockfolder <文件夹>`：解除文件夹密码，里面的笔记逐篇解密回明文；全部存好后才删掉锁，中途有一篇失败就保留锁，没解开的笔记照样能用文件夹密码打开，再执行一次可以接着解除。
-  - 忘记文件夹密码：解锁、修改、解除时点"忘记密码？"，用设密码时记下的恢复密钥重设。没有恢复密钥就无法找回。
-  - 文件夹里的笔记不能单独解除加密，要整个文件夹一起解除。密码不以任何形式保存；忘记密码只能用恢复密钥重设。没设恢复密钥时，忘记密码 = 加密笔记永久打不开。
-- **单篇阅读密码**：`/palace sharepassword <笔记>` 给自己的一篇加密笔记另设一个阅读密码（和保险库密码分开，至少 8 位，建议用一句话）。把这本书交给朋友（或放在讲台、书架上），朋友右键时会弹出输密码框，输对了就能阅读，**只读，不能修改**。
-  - 密码只在双方客户端上用：服务端只核对由密码算出的验证码，看不到密码和正文。每人每篇一分钟内最多试错 5 次，之后要等 1、2、4……分钟（最多 1 小时）才能再试。
-  - 输对一次后，这次进服期间再打开不用重输；上锁（含闲置自动上锁）、离开世界后要重输。
-  - 再次执行 `sharepassword` = 换新密码，旧密码立刻失效；`/palace unsharepassword <笔记>` 取消。换密码和取消时都会换一把新的内容钥匙重新加密，用旧密码看过的人手里的钥匙对新内容没用。但**已经看过的内容收不回**。
-  - 以前加密的笔记（旧格式）设阅读密码时会顺便改成新格式，只改这一篇。文件夹里的笔记也能设，朋友输阅读密码即可，不需要文件夹密码。
-  - 用阅读密码打开的人收不到作者之后的修改推送，重新打开才能看到新内容。
-  - 不要在游戏聊天里发密码：聊天记录服务器看得到。服务器管理员拿到笔记文件后可以离线猜密码，所以阅读密码要够长。
-- 恢复密钥等于第二把钥匙，请妥善保管。
-- **实体钥匙（仅限 Windows）**：在设置中单击“实体钥匙”，验证保险库密码后，按照 Windows 的提示插入 YubiKey 等 FIDO2 安全密钥、输入 PIN 并触摸（共两次），即可添加。之后解锁加密笔记时，可以单击“使用实体钥匙”代替输入密码；密码和恢复密钥仍可正常使用。实体钥匙需要支持 hmac-secret 扩展，每次使用都需要输入钥匙的 PIN。目前只能添加一把，更换时先移除再重新添加。离线解密工具不支持实体钥匙，请使用密码或恢复密钥。
-- 文件名、加密笔记引用的图片不加密。加密笔记的书名显示文件名（正文里的标题在密文中）。
-- 改密码不会让旧备份失效：旧备份配合旧密码仍能解开当时的笔记。
-- **离线解密工具**：配套工具 `memory-palace-decrypt-<版本>.jar`（需要 Java 25）可在不启动游戏的情况下解密笔记。双击打开后，选择 `memory-palace` 文件夹（或其所在的世界存档文件夹），输入保险库密码、文件夹密码或恢复密钥，然后单击“解密”。可解密的笔记将以明文形式保存到同级目录下的“（解密版）”文件夹中，原始文件不会被修改。也可通过命令行使用：`java -jar memory-palace-decrypt-<版本>.jar <笔记文件夹>`。明文文件可被任何人读取，查看完毕后请及时删除。
+- **Inbox encryption**: quick capture (`K`) encrypts without requiring a password at capture time. The keyring contains an inbox key pair: the public key encrypts entries, and entering your password when opening the inbox unlocks the private key for decryption. The server can see only which days have entries, how many entries there are, and their approximate lengths. After you organize and save an inbox note, it becomes a regular encrypted note; later entries that day go into `yyyy-MM-dd-2.md`. If you have not set a password, quick notes remain plain text. Inbox encryption can be disabled in settings.
+- **Protection against public-key substitution**, on other people's servers: a malicious server could replace your inbox public key with its own. The client remembers the fingerprint of the first key it sees. If it later differs, a two-step confirmation appears, with saving disabled by default. If you know the reason, such as resetting your keyring or changing computers, you can select "Trust new inbox key" in settings.
+- One vault password controls all your encrypted notes; in multiplayer, each player has their own.
+- **Separate folder passwords**: `/palace lockfolder <folder>` sets an independent password for a folder, such as a journal. Its notes, including those in subfolders, are encrypted with the folder key. **The vault password cannot open them**, and unlocking your regular encrypted notes does not reveal the journal. Notes subsequently created in that folder are encrypted automatically, and the server refuses to store plain text there. The lock file (`.palace-lock`) is stored inside the folder and moves with it when the folder is moved or renamed externally. Players can lock only folders in their personal area; the host can lock folders outside personal areas. All notes in the folder must belong to the player setting the password. Locks cannot be nested above or below an existing locked folder. A recovery key can also be generated when setting the password.
+  - Notes are encrypted one at a time after the lock is set, at roughly one per second because of the server's save limit. The final report lists successes, failures, and unprocessed notes. If locking or disconnection interrupts the process, run `/palace lockfolder <folder>` again to continue with the remaining notes. Already encrypted notes are skipped.
+  - `/palace folderpassword <folder>` changes the folder password after you enter the current one.
+  - `/palace unlockfolder <folder>` removes the folder password and decrypts the notes to plain text one by one. The lock is deleted only after every note is saved. If any note fails, the lock remains, and notes still encrypted continue to open with the folder password. Run the command again to continue.
+  - If you forget a folder password, click "Forgot password?" while unlocking, changing, or removing it, then reset it with the recovery key saved when the password was set. Without a recovery key, recovery is impossible.
+  - Individual notes in the folder cannot have their encryption removed separately; the whole folder must be processed. Passwords are not stored in any form. A forgotten password can be reset only with the recovery key. Without a recovery key, forgetting the password permanently prevents access to the encrypted notes.
+- **Per-note reading passwords**: `/palace sharepassword <note>` sets a separate reading password for one of your encrypted notes. It is independent of the vault password and must be at least 8 characters; a sentence is recommended. Give the book to a friend or place it on a lectern or bookshelf. Right-clicking opens a password prompt. With the correct password, the friend can **read but not edit** the note.
+  - The password is used only on the two clients. The server checks a verification code derived from it and cannot see the password or the note body. Each player gets at most 5 incorrect attempts per note per minute, followed by waits of 1, 2, 4, and so on minutes, up to 1 hour.
+  - After a correct entry, the password is not requested again during the current server session. Locking, including automatic locking after inactivity, or leaving the world requires it to be entered again.
+  - Running `sharepassword` again replaces the password and immediately invalidates the old one. `/palace unsharepassword <note>` removes it. Both changing and removing the password rotate the content key and re-encrypt the note, so keys held by readers using the old password cannot open new content. However, **content already read cannot be taken back**.
+  - Setting a reading password on an older encrypted note also upgrades that note to the new format; only that note is changed. Notes in password-protected folders can also have reading passwords. Friends need only the reading password, not the folder password.
+  - Readers using a reading password do not receive live updates from the author's later edits. They must reopen the note to see new content.
+  - Do not send passwords in game chat: the server can read chat logs. Server administrators who obtain a note file can attempt to guess the password offline, so use a sufficiently long reading password.
+- A recovery key is equivalent to a second key. Keep it secure.
+- **Security keys (Windows only)**: click "Security key" in settings and verify your vault password. Follow the Windows prompts to insert a FIDO2 security key such as a YubiKey, enter its PIN, and touch it; this is requested twice during registration. Afterwards, click "Use security key" when unlocking encrypted notes instead of entering your password. The password and recovery key remain usable. The key must support the hmac-secret extension, and its PIN is required on every use. Only one key can be registered at a time; remove it before adding a replacement. The offline decryption tool does not support security keys; use your password or recovery key.
+- Filenames and images referenced by encrypted notes are not encrypted. Encrypted note books display the filename because the heading in the note body is encrypted.
+- Changing a password does not invalidate old backups. An old backup and its old password can still decrypt the notes as they were then.
+- **Offline decryption tool**: the companion `memory-palace-decrypt-<version>.jar` tool requires Java 25 and can decrypt notes without starting the game. Double-click it, select the `memory-palace` folder or its containing world save folder, enter your vault password, folder password, or recovery key, then click "Decrypt". Notes that can be decrypted are saved as plain text in a sibling folder with the suffix " (Decrypted)". Original files are not modified. Command-line use is also supported: `java -jar memory-palace-decrypt-<version>.jar <notes-folder>`. Anyone can read the plain-text files; delete them promptly after reviewing them.
 
-## 备份
+## Backups
 
-- 每次进入世界，把笔记库备份到存档之外的 `.minecraft/memory-palace-backups/<世界>/`，保留最近 30 份；内容没变就不备份。
-- 备份是增量的：每个文件的内容只保存一份（`objects/`），每次备份只记录一张清单（`snapshots/`）。没有修改过的文件不会重复保存，占用的空间远小于每次完整打包。旧备份被淘汰后，不再被任何备份使用的内容会一并删除。
-- 每次备份时，另外把最新一次备份打包成完整的 `最新备份.zip`（覆盖上一份），不用任何工具就能直接解压。
-- **在游戏中浏览和恢复**：在设置的“笔记库与备份”页中，可以立即备份、打开备份文件夹，或单击“浏览和恢复备份”查看全部备份，选择一份恢复到笔记库。恢复前会先备份当前内容；当前存在但备份中没有、或内容不同的文件会移到 `.palace/trash`，因此恢复后仍可撤回。仅在单人游戏或自己开设的局域网世界中可用。
-- **用离线工具恢复**（例如世界已被删除）：打开离线工具 `memory-palace-decrypt-<版本>.jar`，选择 `memory-palace-backups` 下对应世界的文件夹，选择备份版本，然后单击“从备份恢复”。恢复的笔记库保存在旁边的新文件夹中，不会覆盖任何文件；其中的加密笔记仍保持加密，可以接着在工具中解密。也可通过命令行使用：`java -jar memory-palace-decrypt-<版本>.jar --restore <备份文件夹> [备份版本]`。
-- 以前版本留下的 ZIP 备份不会被删除，仍可直接解压使用。
-- 备份以 UTC 时间命名，不受时区和夏令时影响。
-- 快速收集按玩家所在地的本地日期归档；每天第一条和时区变化时，会标注时区（如 `(UTC+8)`）。
+- Each time you enter a world, the vault is backed up outside the world save to `.minecraft/memory-palace-backups/<world>/`. The latest 30 backups are retained; no backup is created if the content has not changed.
+- Backups are incremental: each unique file content is stored once in `objects/`, and each backup records only a manifest in `snapshots/`. Unchanged files are not stored repeatedly, using much less space than making a full archive each time. When old backups are removed, content no longer referenced by any backup is also deleted.
+- Each backup also creates a complete `最新备份.zip` archive ("latest backup"), replacing the previous one. It can be extracted directly without a special tool.
+- **Browse and restore in the game**: on the "Notes & Backups" settings page, back up immediately, open the backup folder, or click "Browse and restore backups" to view all backups and restore one to the vault. Current content is backed up first. Files that currently exist but are absent from the backup, or have different content, are moved to `.palace/trash`, so restoration can still be reversed. Available only in singleplayer or a LAN world you host.
+- **Restore with the offline tool**, for example after a world has been deleted: open `memory-palace-decrypt-<version>.jar`, select the relevant world's folder under `memory-palace-backups`, choose a backup version, and click "Restore from Backup". The restored vault is saved in a new sibling folder without overwriting any files. Encrypted notes remain encrypted and can then be decrypted in the tool. Command-line use: `java -jar memory-palace-decrypt-<version>.jar --restore <backup-folder> [backup-version]`.
+- ZIP backups from earlier versions are not deleted and can still be extracted directly.
+- Backups are named using UTC, independent of time zones and daylight saving time.
+- Quick capture files are organized by the player's local date. The first entry each day, and entries after a time-zone change, include the time zone, such as `(UTC+8)`.
 
-## 从源码构建
+## Building from source
 
-需要 JDK 25。
+Requires JDK 25.
 
 ```bash
-./gradlew build        # 产物在 build/libs/
-./gradlew runClient    # 启动开发用客户端
+./gradlew build        # Output in build/libs/
+./gradlew runClient    # Start the development client
 ```
 
-## 第三方库
+## Third-party libraries
 
-模组 jar 内打包了以下库：
+The mod JAR bundles the following libraries:
 
-- [commonmark-java](https://github.com/commonmark/commonmark-java)（BSD-2-Clause）
-- [JLaTeXMath](https://github.com/opencollab/jlatexmath)（GPL-2.0 with Classpath Exception）
-- [Password4j](https://github.com/Password4j/password4j)（Apache-2.0）
-- [fabric-permissions-api](https://github.com/lucko/fabric-permissions-api)（MIT）
-- [NightConfig](https://github.com/TheElectronWill/night-config)（LGPL-3.0）
+- [commonmark-java](https://github.com/commonmark/commonmark-java) (BSD-2-Clause)
+- [JLaTeXMath](https://github.com/opencollab/jlatexmath) (GPL-2.0 with Classpath Exception)
+- [Password4j](https://github.com/Password4j/password4j) (Apache-2.0)
+- [fabric-permissions-api](https://github.com/lucko/fabric-permissions-api) (MIT)
+- [NightConfig](https://github.com/TheElectronWill/night-config) (LGPL-3.0)
+- [java-diff-utils](https://github.com/java-diff-utils/java-diff-utils) (Apache-2.0)
 
-## 许可
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete notices.
+
+## License
 
 [MIT](LICENSE)
 
-本项目在 [Claude Code](https://claude.com/claude-code) 与 OpenAI Codex 的协助下开发。
+This project was developed with assistance from [Claude Code](https://claude.com/claude-code) and OpenAI Codex.

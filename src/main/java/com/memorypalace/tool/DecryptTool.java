@@ -40,10 +40,13 @@ import java.util.List;
  * 和模组本身无关，不 import 任何 net.minecraft 的类。
  */
 public final class DecryptTool {
-	private static final String PROGRESS = "正在解密，请稍候。打开每个密钥约需 1 至 2 秒。";
-	private static final String WARNING = "注意：明文文件可被任何人读取。查看完毕后，请及时删除。";
+	private static final boolean ZH = "zh".equals(java.util.Locale.getDefault().getLanguage());
+	private static final String PROGRESS = t("正在解密，请稍候。打开每个密钥约需 1 至 2 秒。", "Decrypting. Please wait. Unlocking each key takes approximately 1 to 2 seconds.");
+	private static final String WARNING = t("注意：明文文件可被任何人读取。查看完毕后，请及时删除。", "Warning: Anyone can read the plain text files. Delete them promptly when you have finished reviewing them.");
 	private static final DateTimeFormatter SHOWN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 	private static final DateTimeFormatter IN_NAME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
+
+	private static String t(String zh, String en) { return ZH ? zh : en; }
 
 	private DecryptTool() {}
 
@@ -59,33 +62,33 @@ public final class DecryptTool {
 			Path backupDir = Path.of(args[1]);
 			List<VaultBackup.Snapshot> snapshots = VaultBackup.snapshots(backupDir);
 			if (snapshots.isEmpty()) {
-				System.err.println("所选文件夹中没有备份。请选择 memory-palace-backups 下对应世界的文件夹。");
+				System.err.println(t("所选文件夹中没有备份。请选择 memory-palace-backups 下对应世界的文件夹。", "The selected folder contains no backups. Select the folder for the relevant world under memory-palace-backups."));
 				return 2;
 			}
 			VaultBackup.Snapshot snapshot = args.length == 3
 					? snapshots.stream().filter(x -> x.id().equals(args[2])).findFirst().orElse(null) : snapshots.getLast();
 			if (snapshot == null) {
-				System.err.println("找不到指定的备份版本：" + args[2]);
+				System.err.println(t("找不到指定的备份版本：", "The specified backup version was not found: ") + args[2]);
 				return 2;
 			}
 			System.out.println(restore(backupDir, snapshot));
 			return 0;
 		}
 		if (args.length > 2 || args[0].startsWith("-")) {
-			System.out.println("用法：java -jar memory-palace-decrypt.jar <笔记文件夹> [输出文件夹]");
-			System.out.println("      java -jar memory-palace-decrypt.jar --restore <备份文件夹> [备份版本]");
-			System.out.println("笔记文件夹应为 memory-palace 文件夹，或其所在的世界存档文件夹；");
-			System.out.println("备份文件夹为 memory-palace-backups 下对应世界的文件夹，备份版本默认为最新一次。");
+			System.out.println(t("用法：java -jar memory-palace-decrypt.jar <笔记文件夹> [输出文件夹]", "Usage: java -jar memory-palace-decrypt.jar <notes-folder> [output-folder]"));
+			System.out.println(t("      java -jar memory-palace-decrypt.jar --restore <备份文件夹> [备份版本]", "      java -jar memory-palace-decrypt.jar --restore <backup-folder> [backup-version]"));
+			System.out.println(t("笔记文件夹应为 memory-palace 文件夹，或其所在的世界存档文件夹；", "The notes folder must be the memory-palace folder or the world save folder that contains it."));
+			System.out.println(t("备份文件夹为 memory-palace-backups 下对应世界的文件夹，备份版本默认为最新一次。", "The backup folder is the folder for the relevant world under memory-palace-backups. The latest backup version is used by default."));
 			return args[0].equals("-h") || args[0].equals("--help") ? 0 : 2;
 		}
 		Console console = System.console();
 		if (console == null) {
-			System.err.println("未检测到终端，无法安全地输入密码。请双击 JAR 文件以使用图形界面。");
+			System.err.println(t("未检测到终端，无法安全地输入密码。请双击 JAR 文件以使用图形界面。", "No terminal was detected, so a password cannot be entered securely. Double-click the JAR file to use the graphical interface."));
 			return 2;
 		}
 		Path vault = vaultOf(Path.of(args[0]));
 		Path output = args.length > 1 ? Path.of(args[1]) : defaultOutput(vault);
-		char[] secret = console.readPassword("请输入密码或恢复密钥：");
+		char[] secret = console.readPassword(t("请输入密码或恢复密钥：", "Enter your password or recovery key: "));
 		if (secret == null || secret.length == 0) {
 			return 2;
 		}
@@ -104,24 +107,29 @@ public final class DecryptTool {
 		} catch (Exception e) {
 			// 用默认外观
 		}
-		JFrame frame = new JFrame("记忆宫殿笔记工具");
+		JFrame frame = new JFrame(t("记忆宫殿笔记工具", "Memory Palace Note Tool"));
 		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
 		JTextField folder = new JTextField(36);
-		JButton choose = new JButton("浏览...");
+		JButton choose = new JButton(t("浏览...", "Browse..."));
 		JComboBox<SnapshotItem> versions = new JComboBox<>();
-		JButton restore = new JButton("从备份恢复");
+		JButton restore = new JButton(t("从备份恢复", "Restore from Backup"));
 		JPasswordField password = new JPasswordField(36);
-		JButton run = new JButton("解密");
+		JButton run = new JButton(t("解密", "Decrypt"));
 		JTextArea log = new JTextArea(12, 50);
 		log.setEditable(false);
 		log.setLineWrap(true);
-		log.setText("""
+		log.setText(t("""
 				解密：请选择笔记文件夹（memory-palace 文件夹，或其所在的世界存档文件夹），输入在游戏中设置的密码或恢复密钥，然后单击“解密”。解密后的笔记将以明文形式保存到同级目录下的“（解密版）”文件夹中，原始文件不会被修改。
 
 				从备份恢复：请选择 memory-palace-backups 下对应世界的文件夹，选择备份版本，然后单击“从备份恢复”。恢复的笔记库将保存到同级目录下的新文件夹中，其中的加密笔记仍保持加密，可以接着解密。
 
-				""" + WARNING);
+				""", """
+				Decrypt: Select the notes folder (the memory-palace folder or the world save folder that contains it), enter the password or recovery key you set in the game, then click Decrypt. Decrypted notes are saved as plain text in a sibling folder with the suffix " (Decrypted)". The original files are not modified.
+
+				Restore from Backup: Select the folder for the relevant world under memory-palace-backups, choose a backup version, then click Restore from Backup. The restored vault is saved in a new sibling folder. Encrypted notes remain encrypted and can then be decrypted.
+
+				""") + WARNING);
 		Runnable refreshVersions = () -> {
 			versions.removeAllItems();
 			List<VaultBackup.Snapshot> snapshots = List.of();
@@ -161,7 +169,7 @@ public final class DecryptTool {
 			}
 			Path backupDir = Path.of(folder.getText().strip());
 			restore.setEnabled(false);
-			log.setText("正在从备份恢复，请稍候。");
+			log.setText(t("正在从备份恢复，请稍候。", "Restoring from backup. Please wait."));
 			new SwingWorker<Path, Void>() {
 				private String text;
 
@@ -180,7 +188,7 @@ public final class DecryptTool {
 						folder.setText(target.toString()); // 接着就能解密恢复出来的笔记库
 					} catch (Exception ex) {
 						Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-						log.setText("恢复失败：" + cause.getMessage());
+						log.setText(t("恢复失败：", "Restore failed: ") + cause.getMessage());
 						restore.setEnabled(true);
 					}
 				}
@@ -196,12 +204,12 @@ public final class DecryptTool {
 		});
 		run.addActionListener(e -> {
 			if (folder.getText().isBlank() || password.getPassword().length == 0) {
-				log.setText("请先选择笔记文件夹，并输入密码或恢复密钥。");
+				log.setText(t("请先选择笔记文件夹，并输入密码或恢复密钥。", "Select a notes folder and enter your password or recovery key."));
 				return;
 			}
 			Path vault = vaultOf(Path.of(folder.getText().strip()));
 			if (!Files.isDirectory(vault)) {
-				log.setText("找不到指定的文件夹：" + vault);
+				log.setText(t("找不到指定的文件夹：", "The specified folder was not found: ") + vault);
 				return;
 			}
 			char[] secret = password.getPassword();
@@ -225,7 +233,7 @@ public final class DecryptTool {
 						password.setText("");
 					} catch (Exception ex) {
 						Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-						log.setText("解密失败：" + cause.getMessage());
+						log.setText(t("解密失败：", "Decryption failed: ") + cause.getMessage());
 					}
 				}
 			}.execute();
@@ -238,7 +246,7 @@ public final class DecryptTool {
 		c.anchor = GridBagConstraints.WEST;
 		c.gridx = 0;
 		c.gridy = 0;
-		form.add(new JLabel("笔记文件夹："), c);
+		form.add(new JLabel(t("笔记文件夹：", "Notes folder: ")), c);
 		c.gridx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
 		c.weightx = 1;
@@ -249,7 +257,7 @@ public final class DecryptTool {
 		form.add(choose, c);
 		c.gridx = 0;
 		c.gridy = 1;
-		form.add(new JLabel("备份版本："), c);
+		form.add(new JLabel(t("备份版本：", "Backup version: ")), c);
 		c.gridx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
 		c.weightx = 1;
@@ -260,7 +268,7 @@ public final class DecryptTool {
 		form.add(restore, c);
 		c.gridx = 0;
 		c.gridy = 2;
-		form.add(new JLabel("密码或恢复密钥："), c);
+		form.add(new JLabel(t("密码或恢复密钥：", "Password or recovery key: ")), c);
 		c.gridx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
 		c.weightx = 1;
@@ -290,10 +298,10 @@ public final class DecryptTool {
 	static Path defaultOutput(Path vault) {
 		Path abs = vault.toAbsolutePath().normalize();
 		Path parent = abs.getParent() != null ? abs.getParent() : abs;
-		String base = abs.getFileName() != null ? abs.getFileName().toString() : "笔记";
-		Path out = parent.resolve(base + "（解密版）");
+		String base = abs.getFileName() != null ? abs.getFileName().toString() : t("笔记", "Notes");
+		Path out = parent.resolve(base + t("（解密版）", " (Decrypted)"));
 		for (int i = 2; Files.exists(out); i++) {
-			out = parent.resolve(base + "（解密版 " + i + "）");
+			out = parent.resolve(base + t("（解密版 ", " (Decrypted ") + i + t("）", ")"));
 		}
 		return out;
 	}
@@ -302,7 +310,7 @@ public final class DecryptTool {
 	private record SnapshotItem(VaultBackup.Snapshot snapshot, boolean newest) {
 		@Override
 		public String toString() {
-			return SHOWN.format(snapshot.time().atZone(ZoneId.systemDefault())) + (newest ? "（最新）" : "");
+			return SHOWN.format(snapshot.time().atZone(ZoneId.systemDefault())) + (newest ? t("（最新）", " (Latest)") : "");
 		}
 	}
 
@@ -310,11 +318,11 @@ public final class DecryptTool {
 	private static Path restoreTarget(Path backupDir, VaultBackup.Snapshot snapshot) {
 		Path abs = backupDir.toAbsolutePath().normalize();
 		Path parent = abs.getParent() != null ? abs.getParent() : abs;
-		String base = (abs.getFileName() != null ? abs.getFileName().toString() : "笔记") + "（备份 "
+		String base = (abs.getFileName() != null ? abs.getFileName().toString() : t("笔记", "Notes")) + t("（备份 ", " (Backup ")
 				+ IN_NAME.format(snapshot.time().atZone(ZoneId.systemDefault()));
-		Path out = parent.resolve(base + "）");
+		Path out = parent.resolve(base + t("）", ")"));
 		for (int i = 2; Files.exists(out); i++) {
-			out = parent.resolve(base + " " + i + "）");
+			out = parent.resolve(base + " " + i + t("）", ")"));
 		}
 		return out;
 	}
@@ -325,25 +333,25 @@ public final class DecryptTool {
 	}
 
 	private static String report(Path target, VaultBackup.Restored r) {
-		StringBuilder s = new StringBuilder("已从备份恢复 ").append(r.files()).append(" 个文件。\n");
-		s.append("保存位置：").append(target).append('\n');
+		StringBuilder s = new StringBuilder(t("已从备份恢复 ", "Restored ")).append(r.files()).append(t(" 个文件。\n", " files from backup.\n"));
+		s.append(t("保存位置：", "Saved to: ")).append(target).append('\n');
 		if (!r.broken().isEmpty()) {
-			s.append("\n以下文件的备份内容缺失或已损坏，未能恢复：\n");
+			s.append(t("\n以下文件的备份内容缺失或已损坏，未能恢复：\n", "\nThe following files could not be restored because their backup data is missing or damaged:\n"));
 			r.broken().forEach(f -> s.append("  ").append(f).append('\n'));
 		}
-		s.append("\n如需解密其中的加密笔记，请输入密码或恢复密钥，然后单击“解密”。");
+		s.append(t("\n如需解密其中的加密笔记，请输入密码或恢复密钥，然后单击“解密”。", "\nTo decrypt the encrypted notes in this folder, enter your password or recovery key, then click Decrypt."));
 		return s.toString();
 	}
 
 	private static String report(VaultDecryptor.Result r) {
 		StringBuilder s = new StringBuilder();
 		if (r.keys() == 0) {
-			s.append("提供的密码或恢复密钥无法打开任何密钥。请确认输入是否正确，并确认所选文件夹为完整的 memory-palace 文件夹（密钥文件位于其 .palace 子文件夹中）。\n\n");
+			s.append(t("提供的密码或恢复密钥无法打开任何密钥。请确认输入是否正确，并确认所选文件夹为完整的 memory-palace 文件夹（密钥文件位于其 .palace 子文件夹中）。\n\n", "The password or recovery key provided could not unlock any keys. Check your entry and make sure the selected folder is a complete memory-palace folder, with its key files in the .palace subfolder.\n\n"));
 		}
-		s.append("已解密 ").append(r.decrypted()).append(" 篇笔记，已复制 ").append(r.plain()).append(" 篇未加密的笔记。\n");
-		s.append("保存位置：").append(r.output()).append('\n');
+		s.append(t("已解密 ", "Decrypted ")).append(r.decrypted()).append(t(" 篇笔记，已复制 ", " notes and copied ")).append(r.plain()).append(t(" 篇未加密的笔记。\n", " unencrypted notes.\n"));
+		s.append(t("保存位置：", "Saved to: ")).append(r.output()).append('\n');
 		if (!r.failed().isEmpty()) {
-			s.append("\n以下笔记无法解密（可能属于其他玩家，或使用了其他密码，例如文件夹密码）：\n");
+			s.append(t("\n以下笔记无法解密（可能属于其他玩家，或使用了其他密码，例如文件夹密码）：\n", "\nThe following notes could not be decrypted. They may belong to other players or use a different password, such as a folder password:\n"));
 			r.failed().forEach(f -> s.append("  ").append(f).append('\n'));
 		}
 		s.append("\n").append(WARNING);

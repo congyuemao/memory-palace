@@ -190,6 +190,7 @@ public abstract class BookScreen extends Screen {
 
 	/** 同上，正文后面再接几段（比如阅读界面末尾的"链接到本篇的笔记"）。 */
 	protected List<List<BookLine>> layout(String body, List<MdBlock> after) {
+		MarkdownParser.imageLabel = net.minecraft.client.resources.language.I18n.get("screen.memorypalace.image_label");
 		List<MdBlock> blocks = MarkdownParser.parse(body);
 		if (!after.isEmpty()) {
 			blocks = new java.util.ArrayList<>(blocks);
